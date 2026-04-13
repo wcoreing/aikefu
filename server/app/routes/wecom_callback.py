@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import logging
 from fastapi import APIRouter, BackgroundTasks, Query, Request, Response
 from fastapi.responses import PlainTextResponse
@@ -14,6 +15,22 @@ from app.wecom.xml_parse import parse_plain_xml
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["wecom"])
+
+def _mask(s: str, keep: int = 4) -> str:
+    if not s:
+        return ""
+    if len(s) <= keep:
+        return "*" * len(s)
+    return f"{s[:keep]}****"
+
+
+def _aes_key_len(enc_key: str) -> int | None:
+    if not enc_key:
+        return None
+    try:
+        return len(base64.b64decode(enc_key + "="))
+    except Exception:  # noqa: BLE001
+        return -1
 
 
 def _crypt() -> WXBizMsgCrypt:
@@ -32,10 +49,28 @@ async def wecom_verify(
     nonce: str = Query(..., alias="nonce"),
     echostr: str = Query(..., alias="echostr"),
 ) -> PlainTextResponse:
+    s = get_settings()
+    logger.info(
+        "wecom verify called: corp_id=%s token_set=%s enc_key_len=%s aes_decoded_len=%s ts=%s nonce_len=%s echostr_len=%s sig=%s",
+        _mask(s.wecom_corp_id),
+        bool(s.wecom_token),
+        len(s.wecom_encoding_aes_key) if s.wecom_encoding_aes_key else 0,
+        _aes_key_len(s.wecom_encoding_aes_key),
+        timestamp,
+        len(nonce),
+        len(echostr),
+        msg_signature[:8] + "****" if msg_signature else "",
+    )
     try:
         echo = _crypt().verify_url(msg_signature, timestamp, nonce, echostr)
     except WXBizMsgCryptError as e:
-        logger.warning("URL 验证失败: %s", e)
+        logger.warning(
+            "URL 验证失败: %s (corp_id=%s enc_key_len=%s aes_decoded_len=%s)",
+            e,
+            _mask(s.wecom_corp_id),
+            len(s.wecom_encoding_aes_key) if s.wecom_encoding_aes_key else 0,
+            _aes_key_len(s.wecom_encoding_aes_key),
+        )
         return PlainTextResponse("verify fail", status_code=403)
     return PlainTextResponse(content=echo)
 
