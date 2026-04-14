@@ -11,6 +11,10 @@ import logging
 import sys
 
 from mcp.server.fastmcp import FastMCP
+from starlette.applications import Starlette
+from starlette.responses import JSONResponse
+from starlette.routing import Mount, Route
+import uvicorn
 
 from app.config import get_settings
 from app.services.group_broadcast import send_group_msg_by_tag as run_group_broadcast
@@ -121,7 +125,27 @@ async def send_group_msg_by_tag(tag: str, content: str) -> dict:
 
 def main() -> None:
     s2 = get_settings()
-    mcp.run(transport=s2.mcp_transport)
+    if s2.mcp_transport == "stdio":
+        mcp.run(transport="stdio")
+        return
+
+    if s2.mcp_transport == "sse":
+        mcp_asgi = mcp.sse_app()
+    else:
+        # streamable-http
+        mcp_asgi = mcp.streamable_http_app()
+
+    async def health(_request):  # type: ignore[no-untyped-def]
+        # 百炼/探测可能会先 GET 探活；MCP 本体的 GET 通常要求 SSE Accept。
+        return JSONResponse({"status": "ok", "name": "qiwei-wecom"})
+
+    app = Starlette(
+        routes=[
+            Route(s2.mcp_path, health, methods=["GET"]),
+            Mount("/", app=mcp_asgi),
+        ],
+    )
+    uvicorn.run(app, host=s2.mcp_host, port=s2.mcp_port)
 
 
 if __name__ == "__main__":
