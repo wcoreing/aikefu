@@ -1,8 +1,9 @@
 """
-企微相关 MCP 工具（stdio，供百炼挂载）。
+企微相关 MCP 工具（纯 MCP 服务）。
 
-运行：python -m app.mcp_tools.server
-或：qiwei-mcp（安装 editable 后）
+运行：
+  python -m app.mcp_tools
+  或 qiwei-mcp（安装 editable 后）
 """
 
 from __future__ import annotations
@@ -10,13 +11,7 @@ from __future__ import annotations
 import logging
 import sys
 
-from contextlib import asynccontextmanager
-
 from mcp.server.fastmcp import FastMCP
-from starlette.applications import Starlette
-from starlette.responses import JSONResponse
-from starlette.types import Receive, Scope, Send
-import uvicorn
 
 from app.config import get_settings
 from app.services.group_broadcast import send_group_msg_by_tag as run_group_broadcast
@@ -127,56 +122,8 @@ async def send_group_msg_by_tag(tag: str, content: str) -> dict:
 
 def main() -> None:
     s2 = get_settings()
-    if s2.mcp_transport == "stdio":
-        mcp.run(transport="stdio")
-        return
-
-    mcp_asgi = mcp.sse_app() if s2.mcp_transport == "sse" else mcp.streamable_http_app()
-
-    class MCPEntry:
-        """同一路径兼容探活 GET 与 MCP 协议请求。"""
-
-        def __init__(self, inner_app, path: str) -> None:
-            self._inner = inner_app
-            self._path = path
-
-        async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-            if scope["type"] != "http":
-                await self._inner(scope, receive, send)
-                return
-
-            path = scope.get("path") or ""
-            if path != self._path:
-                await self._inner(scope, receive, send)
-                return
-
-            method = (scope.get("method") or "GET").upper()
-            if method == "GET":
-                headers = {k.decode().lower(): v.decode() for k, v in (scope.get("headers") or [])}
-                accept = headers.get("accept", "")
-                # 非 SSE 探活：直接返回 200 JSON
-                if "text/event-stream" not in accept:
-                    res = JSONResponse({"status": "ok", "name": "qiwei-wecom"})
-                    await res(scope, receive, send)
-                    return
-
-            # 其他全部交给 MCP ASGI（含 POST/DELETE、GET SSE）
-            await self._inner(scope, receive, send)
-
-    @asynccontextmanager
-    async def combined_lifespan(app: Starlette):
-        # 关键：确保 mcp_asgi 的 session_manager.run() 被启动
-        async with mcp_asgi.lifespan(app):
-            yield
-
-    app = Starlette(
-        lifespan=combined_lifespan,
-        routes=[],
-    )
-
-    # 用 wrapper ASGI 承接所有请求（避免 Route 方法不匹配导致 405）
-    app.router.default = MCPEntry(mcp_asgi, s2.mcp_path)  # type: ignore[attr-defined]
-    uvicorn.run(app, host=s2.mcp_host, port=s2.mcp_port)
+    # 纯 MCP：由 FastMCP 内部负责 HTTP 传输与生命周期管理
+    mcp.run(transport=s2.mcp_transport)
 
 
 if __name__ == "__main__":
