@@ -11,7 +11,12 @@ from __future__ import annotations
 import logging
 import sys
 
+import json
+
 from fastmcp import FastMCP
+from starlette.responses import JSONResponse
+from starlette.types import Receive, Scope, Send
+import uvicorn
 
 from app.config import get_settings
 from app.services.group_broadcast import send_group_msg_by_tag as run_group_broadcast
@@ -112,6 +117,55 @@ async def send_group_msg_by_tag(tag: str, content: str) -> dict:
         return {"success": 0, "fail": 0, "total": 0, "error": str(e)}
 
 
+def _wrap_bailian(inner: object, mcp_path: str) -> object:
+    """
+    百炼在「获取工具」阶段会先发空 body POST 探测。
+    fastmcp 2 会直接返回 400，这里包一层：空 body → 返回合法 JSON-RPC 错误（200）；
+    正常请求透传给 inner。
+    """
+
+    async def app(scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope.get("path") != mcp_path:
+            await inner(scope, receive, send)  # type: ignore[operator]
+            return
+
+        if (scope.get("method") or "GET").upper() != "POST":
+            await inner(scope, receive, send)  # type: ignore[operator]
+            return
+
+        # 读完整 body
+        body = b""
+        more = True
+        chunks: list[dict] = []
+        while more:
+            msg = await receive()
+            chunks.append(msg)
+            if msg.get("type") == "http.request":
+                body += msg.get("body") or b""
+            more = bool(msg.get("more_body"))
+
+        if not body.strip():
+            await JSONResponse(
+                {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error: empty body"}},
+                status_code=200,
+            )(scope, receive, send)
+            return
+
+        # 把 body 放回给 inner
+        sent = False
+
+        async def replay() -> dict:  # type: ignore[return]
+            nonlocal sent
+            if not sent:
+                sent = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        await inner(scope, replay, send)  # type: ignore[operator]
+
+    return app
+
+
 def main() -> None:
     s = get_settings()
     if s.mcp_transport == "stdio":
@@ -119,21 +173,14 @@ def main() -> None:
         return
 
     if s.mcp_transport == "sse":
-        mcp.run(
-            transport="sse",
-            host=s.mcp_host,
-            port=s.mcp_port,
-            path=s.mcp_path,
-        )
+        inner = mcp.http_app(path=s.mcp_path)
+        app = _wrap_bailian(inner, s.mcp_path)
+        uvicorn.run(app, host=s.mcp_host, port=s.mcp_port)
     else:
         # streamable-http（默认）
-        mcp.run(
-            transport="http",
-            host=s.mcp_host,
-            port=s.mcp_port,
-            path=s.mcp_path,
-            stateless_http=s.mcp_stateless_http,
-        )
+        inner = mcp.http_app(path=s.mcp_path, stateless_http=s.mcp_stateless_http)
+        app = _wrap_bailian(inner, s.mcp_path)
+        uvicorn.run(app, host=s.mcp_host, port=s.mcp_port)
 
 
 if __name__ == "__main__":
