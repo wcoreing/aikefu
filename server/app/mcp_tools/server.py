@@ -12,9 +12,7 @@ import logging
 import sys
 
 from mcp.server.fastmcp import FastMCP
-from starlette.applications import Starlette
-from starlette.responses import JSONResponse, Response
-from starlette.routing import Route
+from starlette.responses import JSONResponse
 from starlette.types import Receive, Scope, Send
 import uvicorn
 
@@ -190,8 +188,8 @@ def main() -> None:
 
         await inner(scope, receive, send)
 
-    app = Starlette(routes=[Route(s2.mcp_path, endpoint=entry, methods=["GET", "POST", "DELETE"])])
-    uvicorn.run(app, host=s2.mcp_host, port=s2.mcp_port)
+    # 直接用 ASGI callable 跑（避免 Starlette Route 将 endpoint 误判为 Request->Response）
+    uvicorn.run(entry, host=s2.mcp_host, port=s2.mcp_port)
 
 
 if __name__ == "__main__":
