@@ -170,7 +170,15 @@ def main() -> None:
                 more = bool(m.get("more_body"))
 
             if not body.strip():
-                await JSONResponse({"status": "ok", "name": "qiwei-wecom"})(scope, receive, send)
+                # 百炼可能会发空 POST 探测，但仍要求返回 JSON-RPC 可反序列化结构
+                await JSONResponse(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": None,
+                        "error": {"code": -32700, "message": "Parse error: empty body"},
+                    },
+                    status_code=200,
+                )(scope, receive, send)
                 return
 
             # 把 body 放回给 inner 再读一次
