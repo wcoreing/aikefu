@@ -11,10 +11,7 @@ from __future__ import annotations
 import logging
 import sys
 
-from mcp.server.fastmcp import FastMCP
-from starlette.responses import JSONResponse
-from starlette.types import Receive, Scope, Send
-import uvicorn
+from fastmcp import FastMCP
 
 from app.config import get_settings
 from app.services.group_broadcast import send_group_msg_by_tag as run_group_broadcast
@@ -27,15 +24,7 @@ logging.basicConfig(
     stream=sys.stderr,
 )
 
-s = get_settings()
-mcp = FastMCP(
-    "qiwei-wecom",
-    host=s.mcp_host,
-    port=s.mcp_port,
-    streamable_http_path=s.mcp_path,
-    json_response=s.mcp_json_response,
-    stateless_http=s.mcp_stateless_http,
-)
+mcp = FastMCP("qiwei-wecom")
 
 REPLY_NOTIFY = "已为您同步专属销售顾问，会尽快联系您~"
 REPLY_TRANSFER = "已为您转接人工客服，请稍候~"
@@ -124,80 +113,27 @@ async def send_group_msg_by_tag(tag: str, content: str) -> dict:
 
 
 def main() -> None:
-    s2 = get_settings()
-    if s2.mcp_transport == "stdio":
+    s = get_settings()
+    if s.mcp_transport == "stdio":
         mcp.run(transport="stdio")
         return
 
-    # 百炼在“获取工具”阶段可能会先发空 POST/非 JSON 探测。
-    # 这里做一个最小兼容包装：空 body / 非 JSON-RPC 直接返回 200 探活 JSON；
-    # 正常 MCP JSON-RPC 再交给 FastMCP 的 ASGI app。
-    inner = mcp.sse_app() if s2.mcp_transport == "sse" else mcp.streamable_http_app()
-
-    async def entry(scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http":
-            await inner(scope, receive, send)
-            return
-
-        path = scope.get("path") or ""
-        if path != s2.mcp_path:
-            await inner(scope, receive, send)
-            return
-
-        method = (scope.get("method") or "GET").upper()
-        if method == "GET":
-            # MCP GET(SSE) 需要 Accept:text/event-stream；否则当作探活
-            headers = {k.decode().lower(): v.decode() for k, v in (scope.get("headers") or [])}
-            if "text/event-stream" not in headers.get("accept", ""):
-                await JSONResponse({"status": "ok", "name": "qiwei-wecom"})(scope, receive, send)
-                return
-
-        if method == "POST":
-            # 读取一次 body：空/非 JSON 时返回探活，避免 MCP 解析 -32700
-            body = b""
-
-            async def _recv() -> dict:  # type: ignore[no-untyped-def]
-                nonlocal body
-                msg = await receive()
-                if msg.get("type") == "http.request":
-                    body += msg.get("body") or b""
-                return msg
-
-            # 先把 body 读完
-            more = True
-            while more:
-                m = await _recv()
-                more = bool(m.get("more_body"))
-
-            if not body.strip():
-                # 百炼可能会发空 POST 探测，但仍要求返回 JSON-RPC 可反序列化结构
-                await JSONResponse(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": None,
-                        "error": {"code": -32700, "message": "Parse error: empty body"},
-                    },
-                    status_code=200,
-                )(scope, receive, send)
-                return
-
-            # 把 body 放回给 inner 再读一次
-            sent = False
-
-            async def _replay() -> dict:  # type: ignore[no-untyped-def]
-                nonlocal sent
-                if sent:
-                    return {"type": "http.request", "body": b"", "more_body": False}
-                sent = True
-                return {"type": "http.request", "body": body, "more_body": False}
-
-            await inner(scope, _replay, send)
-            return
-
-        await inner(scope, receive, send)
-
-    # 直接用 ASGI callable 跑（避免 Starlette Route 将 endpoint 误判为 Request->Response）
-    uvicorn.run(entry, host=s2.mcp_host, port=s2.mcp_port)
+    if s.mcp_transport == "sse":
+        mcp.run(
+            transport="sse",
+            host=s.mcp_host,
+            port=s.mcp_port,
+            path=s.mcp_path,
+        )
+    else:
+        # streamable-http（默认）
+        mcp.run(
+            transport="http",
+            host=s.mcp_host,
+            port=s.mcp_port,
+            path=s.mcp_path,
+            stateless_http=s.mcp_stateless_http,
+        )
 
 
 if __name__ == "__main__":

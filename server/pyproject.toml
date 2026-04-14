@@ -17,7 +17,7 @@ dependencies = [
     "pydantic-settings>=2.6.0",
     "pycryptodome>=3.21.0",
     "redis>=5.2.0",
-    "mcp>=1.2.0",
+    "fastmcp>=2.0.0",
 ]
 
 [project.scripts]
