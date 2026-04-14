@@ -29,6 +29,8 @@ mcp = FastMCP(
     host=s.mcp_host,
     port=s.mcp_port,
     streamable_http_path=s.mcp_path,
+    json_response=s.mcp_json_response,
+    stateless_http=s.mcp_stateless_http,
 )
 
 REPLY_NOTIFY = "已为您同步专属销售顾问，会尽快联系您~"

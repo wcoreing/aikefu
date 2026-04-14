@@ -199,6 +199,16 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("MCP_PATH", "mcp_path"),
         description="streamable-http path",
     )
+    mcp_json_response: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("MCP_JSON_RESPONSE", "mcp_json_response"),
+        description="启用 JSON-only 响应（放宽 Accept 头要求）",
+    )
+    mcp_stateless_http: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("MCP_STATELESS_HTTP", "mcp_stateless_http"),
+        description="启用无状态 HTTP（每个请求独立，无需维护会话）",
+    )
 
 
 @lru_cache
