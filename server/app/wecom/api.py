@@ -138,3 +138,67 @@ class WecomKFClient:
                 break
             cursor = last_next_cursor
         return out, last_next_cursor
+
+    async def service_state_trans(
+        self,
+        *,
+        open_kfid: str,
+        external_userid: str,
+        service_state: int,
+        servicer_userid: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """变更微信客服会话状态（如转人工 service_state=3 需 servicer_userid）。"""
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            access = await self._ensure_token(client)
+            body: Dict[str, Any] = {
+                "open_kfid": open_kfid,
+                "external_userid": external_userid,
+                "service_state": service_state,
+            }
+            if servicer_userid:
+                body["servicer_userid"] = servicer_userid
+            r = await client.post(
+                f"{_QYAPI}/cgi-bin/kf/service_state/trans",
+                params={"access_token": access},
+                json=body,
+            )
+            r.raise_for_status()
+            data = r.json()
+            if data.get("errcode", 0) != 0:
+                raise WecomAPIError(
+                    data.get("errmsg", "service_state/trans failed"),
+                    errcode=data.get("errcode"),
+                )
+            return data
+
+    async def send_application_text(
+        self,
+        *,
+        touser: str,
+        content: str,
+        agentid: int,
+    ) -> Dict[str, Any]:
+        """应用发消息到企业成员（文本），用于通知销售等。"""
+        if not agentid:
+            raise WecomAPIError("WECOM_AGENT_ID 未配置")
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            access = await self._ensure_token(client)
+            payload: Dict[str, Any] = {
+                "touser": touser,
+                "msgtype": "text",
+                "agentid": agentid,
+                "text": {"content": content[:2048]},
+            }
+            r = await client.post(
+                f"{_QYAPI}/cgi-bin/message/send",
+                params={"access_token": access},
+                json=payload,
+            )
+            r.raise_for_status()
+            data = r.json()
+            if data.get("errcode", 0) != 0:
+                raise WecomAPIError(
+                    data.get("errmsg", "message/send failed"),
+                    errcode=data.get("errcode"),
+                )
+            return data

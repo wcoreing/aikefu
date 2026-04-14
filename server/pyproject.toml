@@ -17,7 +17,11 @@ dependencies = [
     "pydantic-settings>=2.6.0",
     "pycryptodome>=3.21.0",
     "redis>=5.2.0",
+    "mcp>=1.2.0",
 ]
+
+[project.scripts]
+qiwei-mcp = "app.mcp_tools.server:main"
 
 [project.optional-dependencies]
 dev = [

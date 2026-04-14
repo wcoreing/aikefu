@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import logging
 
-from app.bailian.client import BailianAppClient, BailianError
+from app.bailian.client import (
+    BailianAppClient,
+    BailianError,
+    stable_kf_user_session_key,
+)
 from app.config import get_settings
 from app.services.context_store import ContextStore, build_store
 from app.wecom.api import WecomAPIError, WecomKFClient
@@ -63,10 +67,20 @@ async def handle_kf_callback(
             continue
 
         prev_session = await store.get_bailian_session(okfid, str(external_userid))
+        if s.bailian_invoke_mode == "workflow":
+            session_for_bailian = prev_session or stable_kf_user_session_key(
+                okfid, str(external_userid)
+            )
+            user_for_bailian = str(external_userid)
+        else:
+            session_for_bailian = prev_session
+            user_for_bailian = None
+
         try:
             reply, new_session = await bailian.chat(
                 prompt=content,
-                session_id=prev_session,
+                session_id=session_for_bailian,
+                user_id=user_for_bailian,
             )
         except BailianError as e:
             logger.exception("百炼调用失败 msgid=%s: %s", mid, e)
