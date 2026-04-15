@@ -100,7 +100,7 @@ def main():
         return
 
     # 直接使用 fastmcp 的 http_app（参考 bailianmcpdemo），不做额外包装
-    app = mcp.http_app(path=s.mcp_path, stateless_http=True)
+    app = mcp.http_app(path=s.mcp_path)
     uvicorn.run(
         app,
         host=s.mcp_host or "0.0.0.0",

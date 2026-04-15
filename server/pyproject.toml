@@ -11,14 +11,13 @@ version = "0.1.0"
 description = "企微微信客服 ↔ 百炼智能体 中间服务 (MVP)"
 requires-python = ">=3.11"
 dependencies = [
-    "fastapi>=0.115.0",
-    "uvicorn[standard]>=0.32.0",
-    "httpx>=0.27.0",
-    "pydantic-settings>=2.6.0",
+    "fastapi>=0.116.0,<1.0", # ✅ 最新稳定版
+    "uvicorn[standard]>=0.35.0", # ✅ 最新稳定版
+    "httpx>=0.28.0", # ✅ 最新稳定版
+    "pydantic-settings>=2.8.0",
     "pycryptodome>=3.21.0",
-    "redis>=5.2.0",
-    "fastmcp>=2.0.0",
-    "mcp-tools>=0.1.0",
+    "redis>=5.2.0", # ✅ 修复 HTTP/初始化bug
+    "fastmcp>=2.2.0",
 ]
 
 [project.scripts]
@@ -33,4 +32,3 @@ dev = [
 [tool.pytest.ini_options]
 pythonpath = ["."]
 asyncio_mode = "auto"
-asyncio_default_fixture_loop_scope = "function"
