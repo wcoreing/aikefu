@@ -11,13 +11,13 @@ version = "0.1.0"
 description = "企微微信客服 ↔ 百炼智能体 中间服务 (MVP)"
 requires-python = ">=3.11"
 dependencies = [
-    "fastapi>=0.116.0,<1.0", # ✅ 最新稳定版
     "uvicorn[standard]>=0.35.0", # ✅ 最新稳定版
     "httpx>=0.28.0", # ✅ 最新稳定版
     "pydantic-settings>=2.8.0",
     "pycryptodome>=3.21.0",
     "redis>=5.2.0", # ✅ 修复 HTTP/初始化bug
-    "fastmcp>=2.2.0",
+    "fastmcp>=3.2.4",
+    "fastapi>=0.135.3",
 ]
 
 [project.scripts]

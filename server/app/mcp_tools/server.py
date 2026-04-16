@@ -3,6 +3,9 @@ from __future__ import annotations
 import logging
 import sys
 
+from starlette.applications import Starlette
+from starlette.routing import Mount
+
 from fastmcp import FastMCP
 import uvicorn
 
@@ -100,12 +103,14 @@ def main():
         return
 
     # 直接使用 fastmcp 的 http_app（参考 bailianmcpdemo），不做额外包装
-    app = mcp.http_app(path=s.mcp_path)
-    uvicorn.run(
-        app,
-        host=s.mcp_host or "0.0.0.0",
-        port=s.mcp_port or 8000,
+    mcp_asgi = mcp.http_app(path=s.mcp_path)
+    # streamable-http 需要把 fastmcp 的 lifespan 传给父 ASGI 应用，
+    # 否则会报：task group was not initialized。
+    app = Starlette(
+        routes=[Mount("/", app=mcp_asgi)],
+        lifespan=getattr(mcp_asgi, "lifespan", None),
     )
+    uvicorn.run(app, host=s.mcp_host or "0.0.0.0", port=s.mcp_port or 8000)
 
 
 if __name__ == "__main__":
