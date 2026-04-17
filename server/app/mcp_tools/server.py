@@ -2,8 +2,13 @@ from __future__ import annotations
 
 import logging
 import sys
+import time
+import uuid
 
 from starlette.applications import Starlette
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import Response
 from starlette.routing import Mount
 
 from fastmcp import FastMCP
@@ -24,6 +29,155 @@ mcp = FastMCP("qiwei-wecom")
 
 REPLY_NOTIFY = "已为您同步专属销售顾问，会尽快联系您~"
 REPLY_TRANSFER = "已为您转接人工客服，请稍候~"
+
+
+def _redact_headers(headers: dict[str, str]) -> dict[str, str]:
+    redacted: dict[str, str] = {}
+    for k, v in headers.items():
+        lk = k.lower()
+        if lk in {"authorization", "cookie", "set-cookie", "x-api-key"}:
+            redacted[k] = "***"
+        else:
+            redacted[k] = v
+    return redacted
+
+
+def _truncate_bytes(data: bytes, limit: int = 2048) -> str:
+    if not data:
+        return ""
+    if len(data) <= limit:
+        try:
+            return data.decode("utf-8", errors="replace")
+        except Exception:
+            return repr(data)
+    head = data[:limit]
+    try:
+        prefix = head.decode("utf-8", errors="replace")
+    except Exception:
+        prefix = repr(head)
+    return f"{prefix}...[truncated {len(data) - limit} bytes]"
+
+
+class RequestResponseLogMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        logger = logging.getLogger(__name__)
+        request_id = request.headers.get("x-request-id") or uuid.uuid4().hex
+
+        start = time.perf_counter()
+        req_body_preview = ""
+        content_type = request.headers.get("content-type", "")
+        try:
+            if request.method not in {"GET", "HEAD"} and (
+                "application/json" in content_type
+                or "application/x-www-form-urlencoded" in content_type
+                or content_type.startswith("text/")
+            ):
+                body = await request.body()
+                req_body_preview = _truncate_bytes(body)
+        except Exception:
+            logger.exception("mcp http 读取请求体失败 request_id=%s", request_id)
+
+        client = getattr(request, "client", None)
+        client_host = getattr(client, "host", None) if client else None
+        client_port = getattr(client, "port", None) if client else None
+
+        logger.info(
+            "mcp http 请求 request_id=%s client=%s:%s method=%s path=%s query=%s headers=%s body=%s",
+            request_id,
+            client_host,
+            client_port,
+            request.method,
+            request.url.path,
+            request.url.query,
+            _redact_headers(dict(request.headers)),
+            req_body_preview,
+        )
+
+        try:
+            response = await call_next(request)
+        except Exception:
+            cost_ms = int((time.perf_counter() - start) * 1000)
+            logger.exception(
+                "mcp http 异常 request_id=%s cost_ms=%s method=%s path=%s",
+                request_id,
+                cost_ms,
+                request.method,
+                request.url.path,
+            )
+            raise
+
+        cost_ms = int((time.perf_counter() - start) * 1000)
+        try:
+            response.headers.setdefault("x-request-id", request_id)
+        except Exception:
+            pass
+
+        resp_preview = ""
+        resp_body_len: int | None = None
+        resp_content_type = response.headers.get("content-type", "") if hasattr(response, "headers") else ""
+        is_streaming = getattr(response, "body_iterator", None) is not None and not hasattr(response, "body")
+
+        def _should_log_body(ct: str) -> bool:
+            lct = (ct or "").lower()
+            return (
+                "application/json" in lct
+                or lct.startswith("text/")
+                or "application/x-www-form-urlencoded" in lct
+                or "application/xml" in lct
+            )
+
+        try:
+            if not is_streaming and _should_log_body(resp_content_type):
+                body_bytes = getattr(response, "body", b"") or b""
+                resp_body_len = len(body_bytes)
+                resp_preview = _truncate_bytes(body_bytes, limit=4096)
+            elif is_streaming and _should_log_body(resp_content_type):
+                max_capture = 4096
+                captured = bytearray()
+                original_iter = response.body_iterator
+
+                async def _wrap_iterator():
+                    nonlocal resp_body_len
+                    total = 0
+                    async for chunk in original_iter:
+                        if isinstance(chunk, str):
+                            b = chunk.encode("utf-8", errors="replace")
+                        else:
+                            b = bytes(chunk)
+                        total += len(b)
+                        if len(captured) < max_capture:
+                            remain = max_capture - len(captured)
+                            captured.extend(b[:remain])
+                        yield chunk
+                    resp_body_len = total
+                    try:
+                        logger.info(
+                            "mcp http 流式响应体 request_id=%s resp_content_type=%s resp_len=%s body=%s",
+                            request_id,
+                            resp_content_type,
+                            resp_body_len,
+                            _truncate_bytes(bytes(captured), limit=max_capture),
+                        )
+                    except Exception:
+                        logger.exception("mcp http 记录流式响应体失败 request_id=%s", request_id)
+
+                response.body_iterator = _wrap_iterator()
+                resp_preview = "[streaming]"
+        except Exception:
+            logger.exception("mcp http 读取响应体失败 request_id=%s", request_id)
+
+        logger.info(
+            "mcp http 响应 request_id=%s status=%s cost_ms=%s media_type=%s resp_content_type=%s resp_len=%s body=%s",
+            request_id,
+            getattr(response, "status_code", None),
+            cost_ms,
+            getattr(response, "media_type", None),
+            resp_content_type,
+            resp_body_len,
+            resp_preview,
+        )
+        return response
+
 
 # ------------------------------
 # 工具定义（完全不变）
@@ -179,6 +333,7 @@ def main():
         routes=[Mount("/", app=mcp_asgi)],
         lifespan=getattr(mcp_asgi, "lifespan", None),
     )
+    app.add_middleware(RequestResponseLogMiddleware)
     uvicorn.run(app, host=s.mcp_host or "0.0.0.0", port=s.mcp_port or 8000)
 
 
