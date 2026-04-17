@@ -6,9 +6,6 @@ import time
 import uuid
 
 from starlette.applications import Starlette
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
-from starlette.responses import Response
 from starlette.routing import Mount
 
 from fastmcp import FastMCP
@@ -58,64 +55,71 @@ def _truncate_bytes(data: bytes, limit: int = 2048) -> str:
     return f"{prefix}...[truncated {len(data) - limit} bytes]"
 
 
-class RequestResponseLogMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        logger = logging.getLogger(__name__)
-        request_id = request.headers.get("x-request-id") or uuid.uuid4().hex
+class RequestResponseLogMiddleware:
+    """
+    采用原生 ASGI Middleware 捕获响应体（避免 BaseHTTPMiddleware 将所有响应包装为 StreamingResponse 导致拿不到 body）。
+    """
+
+    def __init__(self, app):
+        self.app = app
+        self.logger = logging.getLogger(__name__)
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
 
         start = time.perf_counter()
-        req_body_preview = ""
-        content_type = request.headers.get("content-type", "")
-        try:
-            if request.method not in {"GET", "HEAD"} and (
-                "application/json" in content_type
-                or "application/x-www-form-urlencoded" in content_type
-                or content_type.startswith("text/")
-            ):
-                body = await request.body()
-                req_body_preview = _truncate_bytes(body)
-        except Exception:
-            logger.exception("mcp http 读取请求体失败 request_id=%s", request_id)
 
-        client = getattr(request, "client", None)
-        client_host = getattr(client, "host", None) if client else None
-        client_port = getattr(client, "port", None) if client else None
+        headers = {k.decode("latin-1"): v.decode("latin-1") for k, v in scope.get("headers") or []}
+        request_id = headers.get("x-request-id") or uuid.uuid4().hex
 
-        logger.info(
-            "mcp http 请求 request_id=%s client=%s:%s method=%s path=%s query=%s headers=%s body=%s",
+        method = scope.get("method", "")
+        path = scope.get("path", "")
+        query = (scope.get("query_string") or b"").decode("latin-1")
+        client = scope.get("client") or (None, None)
+        client_host, client_port = client[0], client[1]
+
+        req_content_type = headers.get("content-type", "")
+        req_should_capture_body = method not in {"GET", "HEAD"} and (
+            "application/json" in req_content_type
+            or "application/x-www-form-urlencoded" in req_content_type
+            or req_content_type.startswith("text/")
+        )
+
+        req_captured = bytearray()
+        req_total = 0
+        req_limit = 2048
+
+        async def receive_wrapped():
+            nonlocal req_total
+            message = await receive()
+            if req_should_capture_body and message.get("type") == "http.request":
+                body = message.get("body") or b""
+                req_total += len(body)
+                if len(req_captured) < req_limit:
+                    remain = req_limit - len(req_captured)
+                    req_captured.extend(body[:remain])
+            return message
+
+        self.logger.info(
+            "mcp http 请求 request_id=%s client=%s:%s method=%s path=%s query=%s headers=%s",
             request_id,
             client_host,
             client_port,
-            request.method,
-            request.url.path,
-            request.url.query,
-            _redact_headers(dict(request.headers)),
-            req_body_preview,
+            method,
+            path,
+            query,
+            _redact_headers(headers),
         )
 
-        try:
-            response = await call_next(request)
-        except Exception:
-            cost_ms = int((time.perf_counter() - start) * 1000)
-            logger.exception(
-                "mcp http 异常 request_id=%s cost_ms=%s method=%s path=%s",
-                request_id,
-                cost_ms,
-                request.method,
-                request.url.path,
-            )
-            raise
-
-        cost_ms = int((time.perf_counter() - start) * 1000)
-        try:
-            response.headers.setdefault("x-request-id", request_id)
-        except Exception:
-            pass
-
-        resp_preview = ""
-        resp_body_len: int | None = None
-        resp_content_type = response.headers.get("content-type", "") if hasattr(response, "headers") else ""
-        is_streaming = getattr(response, "body_iterator", None) is not None and not hasattr(response, "body")
+        resp_status: int | None = None
+        resp_headers: dict[str, str] = {}
+        resp_content_type = ""
+        resp_should_capture_body = False
+        resp_captured = bytearray()
+        resp_total = 0
+        resp_limit = 4096
 
         def _should_log_body(ct: str) -> bool:
             lct = (ct or "").lower()
@@ -126,57 +130,65 @@ class RequestResponseLogMiddleware(BaseHTTPMiddleware):
                 or "application/xml" in lct
             )
 
+        async def send_wrapped(message):
+            nonlocal resp_status, resp_headers, resp_content_type, resp_should_capture_body, resp_total
+            if message.get("type") == "http.response.start":
+                resp_status = int(message.get("status") or 0)
+                raw_headers = message.get("headers") or []
+                resp_headers = {k.decode("latin-1"): v.decode("latin-1") for k, v in raw_headers}
+                resp_headers.setdefault("x-request-id", request_id)
+                resp_content_type = resp_headers.get("content-type", "")
+                resp_should_capture_body = _should_log_body(resp_content_type)
+
+                # 需要把注入的 header 写回 message
+                message = {**message, "headers": [(k.encode("latin-1"), v.encode("latin-1")) for k, v in resp_headers.items()]}
+            elif message.get("type") == "http.response.body":
+                if resp_should_capture_body:
+                    body = message.get("body") or b""
+                    resp_total += len(body)
+                    if len(resp_captured) < resp_limit:
+                        remain = resp_limit - len(resp_captured)
+                        resp_captured.extend(body[:remain])
+            await send(message)
+
         try:
-            if not is_streaming and _should_log_body(resp_content_type):
-                body_bytes = getattr(response, "body", b"") or b""
-                resp_body_len = len(body_bytes)
-                resp_preview = _truncate_bytes(body_bytes, limit=4096)
-            elif is_streaming and _should_log_body(resp_content_type):
-                max_capture = 4096
-                captured = bytearray()
-                original_iter = response.body_iterator
-
-                async def _wrap_iterator():
-                    nonlocal resp_body_len
-                    total = 0
-                    async for chunk in original_iter:
-                        if isinstance(chunk, str):
-                            b = chunk.encode("utf-8", errors="replace")
-                        else:
-                            b = bytes(chunk)
-                        total += len(b)
-                        if len(captured) < max_capture:
-                            remain = max_capture - len(captured)
-                            captured.extend(b[:remain])
-                        yield chunk
-                    resp_body_len = total
-                    try:
-                        logger.info(
-                            "mcp http 流式响应体 request_id=%s resp_content_type=%s resp_len=%s body=%s",
-                            request_id,
-                            resp_content_type,
-                            resp_body_len,
-                            _truncate_bytes(bytes(captured), limit=max_capture),
-                        )
-                    except Exception:
-                        logger.exception("mcp http 记录流式响应体失败 request_id=%s", request_id)
-
-                response.body_iterator = _wrap_iterator()
-                resp_preview = "[streaming]"
+            await self.app(scope, receive_wrapped, send_wrapped)
         except Exception:
-            logger.exception("mcp http 读取响应体失败 request_id=%s", request_id)
+            cost_ms = int((time.perf_counter() - start) * 1000)
+            self.logger.exception(
+                "mcp http 异常 request_id=%s cost_ms=%s method=%s path=%s",
+                request_id,
+                cost_ms,
+                method,
+                path,
+            )
+            raise
+        finally:
+            # 请求体日志（预览）
+            if req_should_capture_body:
+                self.logger.info(
+                    "mcp http 请求体 request_id=%s req_len=%s body=%s",
+                    request_id,
+                    req_total,
+                    _truncate_bytes(bytes(req_captured), limit=req_limit),
+                )
 
-        logger.info(
-            "mcp http 响应 request_id=%s status=%s cost_ms=%s media_type=%s resp_content_type=%s resp_len=%s body=%s",
-            request_id,
-            getattr(response, "status_code", None),
-            cost_ms,
-            getattr(response, "media_type", None),
-            resp_content_type,
-            resp_body_len,
-            resp_preview,
-        )
-        return response
+            cost_ms = int((time.perf_counter() - start) * 1000)
+            body_preview = ""
+            resp_len: int | None = None
+            if resp_should_capture_body:
+                resp_len = resp_total
+                body_preview = _truncate_bytes(bytes(resp_captured), limit=resp_limit)
+
+            self.logger.info(
+                "mcp http 响应 request_id=%s status=%s cost_ms=%s resp_content_type=%s resp_len=%s body=%s",
+                request_id,
+                resp_status,
+                cost_ms,
+                resp_content_type,
+                resp_len,
+                body_preview if resp_should_capture_body else "",
+            )
 
 
 # ------------------------------
