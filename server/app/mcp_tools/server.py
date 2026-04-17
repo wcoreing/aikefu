@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import logging
 import sys
-import time
-import uuid
 
 from starlette.applications import Starlette
 from starlette.routing import Mount
@@ -26,170 +24,6 @@ mcp = FastMCP("qiwei-wecom")
 
 REPLY_NOTIFY = "已为您同步专属销售顾问，会尽快联系您~"
 REPLY_TRANSFER = "已为您转接人工客服，请稍候~"
-
-
-def _redact_headers(headers: dict[str, str]) -> dict[str, str]:
-    redacted: dict[str, str] = {}
-    for k, v in headers.items():
-        lk = k.lower()
-        if lk in {"authorization", "cookie", "set-cookie", "x-api-key"}:
-            redacted[k] = "***"
-        else:
-            redacted[k] = v
-    return redacted
-
-
-def _truncate_bytes(data: bytes, limit: int = 2048) -> str:
-    if not data:
-        return ""
-    if len(data) <= limit:
-        try:
-            return data.decode("utf-8", errors="replace")
-        except Exception:
-            return repr(data)
-    head = data[:limit]
-    try:
-        prefix = head.decode("utf-8", errors="replace")
-    except Exception:
-        prefix = repr(head)
-    return f"{prefix}...[truncated {len(data) - limit} bytes]"
-
-
-class RequestResponseLogMiddleware:
-    """
-    采用原生 ASGI Middleware 捕获响应体（避免 BaseHTTPMiddleware 将所有响应包装为 StreamingResponse 导致拿不到 body）。
-    """
-
-    def __init__(self, app):
-        self.app = app
-        self.logger = logging.getLogger(__name__)
-
-    async def __call__(self, scope, receive, send):
-        if scope.get("type") != "http":
-            await self.app(scope, receive, send)
-            return
-
-        start = time.perf_counter()
-
-        headers = {k.decode("latin-1"): v.decode("latin-1") for k, v in scope.get("headers") or []}
-        request_id = headers.get("x-request-id") or uuid.uuid4().hex
-
-        method = scope.get("method", "")
-        path = scope.get("path", "")
-        query = (scope.get("query_string") or b"").decode("latin-1")
-        client = scope.get("client") or (None, None)
-        client_host, client_port = client[0], client[1]
-
-        req_content_type = headers.get("content-type", "")
-        req_should_capture_body = method not in {"GET", "HEAD"} and (
-            "application/json" in req_content_type
-            or "application/x-www-form-urlencoded" in req_content_type
-            or req_content_type.startswith("text/")
-        )
-
-        req_captured = bytearray()
-        req_total = 0
-        req_limit = 2048
-
-        async def receive_wrapped():
-            nonlocal req_total
-            message = await receive()
-            if req_should_capture_body and message.get("type") == "http.request":
-                body = message.get("body") or b""
-                req_total += len(body)
-                if len(req_captured) < req_limit:
-                    remain = req_limit - len(req_captured)
-                    req_captured.extend(body[:remain])
-            return message
-
-        self.logger.info(
-            "mcp http 请求 request_id=%s client=%s:%s method=%s path=%s query=%s headers=%s",
-            request_id,
-            client_host,
-            client_port,
-            method,
-            path,
-            query,
-            _redact_headers(headers),
-        )
-
-        resp_status: int | None = None
-        resp_headers: dict[str, str] = {}
-        resp_content_type = ""
-        resp_should_capture_body = False
-        resp_captured = bytearray()
-        resp_total = 0
-        resp_limit = 4096
-
-        def _should_log_body(ct: str) -> bool:
-            lct = (ct or "").lower()
-            return (
-                "application/json" in lct
-                or lct.startswith("text/")
-                or "application/x-www-form-urlencoded" in lct
-                or "application/xml" in lct
-            )
-
-        async def send_wrapped(message):
-            nonlocal resp_status, resp_headers, resp_content_type, resp_should_capture_body, resp_total
-            if message.get("type") == "http.response.start":
-                resp_status = int(message.get("status") or 0)
-                raw_headers = message.get("headers") or []
-                resp_headers = {k.decode("latin-1"): v.decode("latin-1") for k, v in raw_headers}
-                resp_headers.setdefault("x-request-id", request_id)
-                resp_content_type = resp_headers.get("content-type", "")
-                resp_should_capture_body = _should_log_body(resp_content_type)
-
-                # 需要把注入的 header 写回 message
-                message = {**message, "headers": [(k.encode("latin-1"), v.encode("latin-1")) for k, v in resp_headers.items()]}
-            elif message.get("type") == "http.response.body":
-                if resp_should_capture_body:
-                    body = message.get("body") or b""
-                    resp_total += len(body)
-                    if len(resp_captured) < resp_limit:
-                        remain = resp_limit - len(resp_captured)
-                        resp_captured.extend(body[:remain])
-            await send(message)
-
-        try:
-            await self.app(scope, receive_wrapped, send_wrapped)
-        except Exception:
-            cost_ms = int((time.perf_counter() - start) * 1000)
-            self.logger.exception(
-                "mcp http 异常 request_id=%s cost_ms=%s method=%s path=%s",
-                request_id,
-                cost_ms,
-                method,
-                path,
-            )
-            raise
-        finally:
-            # 请求体日志（预览）
-            if req_should_capture_body:
-                self.logger.info(
-                    "mcp http 请求体 request_id=%s req_len=%s body=%s",
-                    request_id,
-                    req_total,
-                    _truncate_bytes(bytes(req_captured), limit=req_limit),
-                )
-
-            cost_ms = int((time.perf_counter() - start) * 1000)
-            body_preview = ""
-            resp_len: int | None = None
-            if resp_should_capture_body:
-                resp_len = resp_total
-                body_preview = _truncate_bytes(bytes(resp_captured), limit=resp_limit)
-
-            self.logger.info(
-                "mcp http 响应 request_id=%s status=%s cost_ms=%s resp_content_type=%s resp_len=%s body=%s",
-                request_id,
-                resp_status,
-                cost_ms,
-                resp_content_type,
-                resp_len,
-                body_preview if resp_should_capture_body else "",
-            )
-
 
 # ------------------------------
 # 工具定义（完全不变）
@@ -345,7 +179,6 @@ def main():
         routes=[Mount("/", app=mcp_asgi)],
         lifespan=getattr(mcp_asgi, "lifespan", None),
     )
-    app.add_middleware(RequestResponseLogMiddleware)
     uvicorn.run(app, host=s.mcp_host or "0.0.0.0", port=s.mcp_port or 8000)
 
 
