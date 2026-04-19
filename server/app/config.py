@@ -112,14 +112,21 @@ class Settings(BaseSettings):
     bailian_invoke_mode: Literal["workflow", "agent"] = Field(
         default="agent",
         validation_alias=AliasChoices("BAILIAN_INVOKE_MODE", "bailian_invoke_mode"),
-        description="workflow=方案1 工作流入参 query/session_id/user_id；agent=仅 prompt+session_id（默认 agent 兼容旧配置）",
+        description="工作流应用须用 workflow；智能体应用须用 agent。混用会报 Prompt/query 等参数缺失",
+    )
+    bailian_agent_prompt_key: str = Field(
+        default="prompt",
+        validation_alias=AliasChoices(
+            "BAILIAN_AGENT_PROMPT_KEY", "bailian_agent_prompt_key"
+        ),
+        description="agent 模式写入 input 的用户问题字段名，须与百炼侧一致（若报 Prompt 缺失可改为 Prompt）",
     )
     bailian_workflow_query_key: str = Field(
         default="query",
         validation_alias=AliasChoices(
             "BAILIAN_WORKFLOW_QUERY_KEY", "bailian_workflow_query_key"
         ),
-        description="工作流开始节点：用户问题变量名（与百炼画布一致）",
+        description="工作流开始节点用户问题变量名，须与画布完全一致（新版常为 Prompt，区分大小写）",
     )
     bailian_workflow_session_key: str = Field(
         default="session_id",

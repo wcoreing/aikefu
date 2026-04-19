@@ -99,7 +99,8 @@ class BailianAppClient:
         if messages:
             inp2["messages"] = messages
         else:
-            inp2["prompt"] = prompt
+            key = (self._s.bailian_agent_prompt_key or "prompt").strip() or "prompt"
+            inp2[key] = prompt
         if session_id:
             inp2["session_id"] = session_id
         return inp2
@@ -122,8 +123,12 @@ class BailianAppClient:
         if not self._s.dashscope_api_key:
             raise BailianError("DASHSCOPE_API_KEY 未配置")
 
+        p = (prompt or "").strip()
+        if not p and not messages:
+            raise BailianError("prompt 为空，无法调用百炼")
+
         inp = self._build_input(
-            prompt=prompt,
+            prompt=p,
             session_id=session_id,
             user_id=user_id,
             messages=messages,
