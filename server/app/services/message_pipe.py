@@ -56,6 +56,8 @@ async def handle_kf_callback(
         if msg.get("msgtype") != "text":
             continue
         text_obj = msg.get("text") or {}
+        #打印text_obj
+        logger.info("text_obj: %s", text_obj)
         content = text_obj.get("content")
         if not content or not isinstance(content, str):
             continue
