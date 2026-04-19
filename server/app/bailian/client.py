@@ -83,6 +83,8 @@ class BailianAppClient:
         session_id: Optional[str],
         user_id: Optional[str],
         messages: Optional[List[Dict[str, Any]]],
+        open_kfid: Optional[str],
+        summary: Optional[str],
     ) -> Dict[str, Any]:
         if self._s.bailian_invoke_mode == "workflow":
             if messages:
@@ -91,16 +93,27 @@ class BailianAppClient:
                 self._s.bailian_workflow_query_key: prompt,
                 self._s.bailian_workflow_user_key: user_id or "",
             }
-            if session_id:
-                inp[self._s.bailian_workflow_session_key] = session_id
+            ok = (self._s.bailian_workflow_open_kfid_key or "").strip()
+            if ok:
+                inp[ok] = open_kfid or ""
+            sk = (self._s.bailian_workflow_summary_key or "").strip()
+            if sk:
+                inp[sk] = summary if summary is not None else ""
+            sess_k = (self._s.bailian_workflow_session_key or "").strip()
+            if session_id and sess_k:
+                inp[sess_k] = session_id
             return inp
 
         inp2: Dict[str, Any] = {}
         if messages:
             inp2["messages"] = messages
         else:
-            key = (self._s.bailian_agent_prompt_key or "prompt").strip() or "prompt"
-            inp2[key] = prompt
+            # 国内版校验常报 Required parameter(Prompt)；文档/SDK 多为小写 prompt：两者同传兼容
+            inp2["prompt"] = prompt
+            inp2["Prompt"] = prompt
+            extra = (self._s.bailian_agent_prompt_key or "").strip()
+            if extra and extra not in ("prompt", "Prompt"):
+                inp2[extra] = prompt
         if session_id:
             inp2["session_id"] = session_id
         return inp2
@@ -112,10 +125,12 @@ class BailianAppClient:
         session_id: Optional[str] = None,
         user_id: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
+        open_kfid: Optional[str] = None,
+        summary: Optional[str] = None,
     ) -> tuple[str, Optional[str]]:
         """
         返回 (reply_text, session_id)。
-        workflow：input 为 query + user_id + session_id（与方案1 开始节点对齐）。
+        workflow：input 与开始节点变量一致（如 query、external_userid、open_kfid、summary）。
         agent：input 为 prompt + session_id。
         """
         if not self._url:
@@ -132,6 +147,8 @@ class BailianAppClient:
             session_id=session_id,
             user_id=user_id,
             messages=messages,
+            open_kfid=open_kfid,
+            summary=summary,
         )
         body: Dict[str, Any] = {"input": inp, "parameters": {}, "debug": {}}
 

@@ -81,6 +81,8 @@ async def handle_kf_callback(
                 prompt=content,
                 session_id=session_for_bailian,
                 user_id=user_for_bailian,
+                open_kfid=str(okfid),
+                summary="",
             )
         except BailianError as e:
             logger.exception("百炼调用失败 msgid=%s: %s", mid, e)

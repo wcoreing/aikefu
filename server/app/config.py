@@ -115,32 +115,46 @@ class Settings(BaseSettings):
         description="工作流应用须用 workflow；智能体应用须用 agent。混用会报 Prompt/query 等参数缺失",
     )
     bailian_agent_prompt_key: str = Field(
-        default="prompt",
+        default="",
         validation_alias=AliasChoices(
             "BAILIAN_AGENT_PROMPT_KEY", "bailian_agent_prompt_key"
         ),
-        description="agent 模式写入 input 的用户问题字段名，须与百炼侧一致（若报 Prompt 缺失可改为 Prompt）",
+        description="agent 模式额外写入 input 的第三字段名（空则只发 prompt+Prompt）；仅当画布要求其它变量名时填写",
     )
     bailian_workflow_query_key: str = Field(
         default="query",
         validation_alias=AliasChoices(
             "BAILIAN_WORKFLOW_QUERY_KEY", "bailian_workflow_query_key"
         ),
-        description="工作流开始节点用户问题变量名，须与画布完全一致（新版常为 Prompt，区分大小写）",
+        description="工作流开始节点预置「用户问题」变量名（常见为 query）",
     )
     bailian_workflow_session_key: str = Field(
-        default="session_id",
+        default="",
         validation_alias=AliasChoices(
             "BAILIAN_WORKFLOW_SESSION_KEY", "bailian_workflow_session_key"
         ),
-        description="工作流开始节点：会话 ID 变量名",
+        description="开始节点若有会话变量则填写（如 session_id）；空则不写入 input",
     )
     bailian_workflow_user_key: str = Field(
-        default="user_id",
+        default="external_userid",
         validation_alias=AliasChoices(
             "BAILIAN_WORKFLOW_USER_KEY", "bailian_workflow_user_key"
         ),
-        description="工作流开始节点：用户 ID 变量名（建议为企微 external_userid）",
+        description="工作流开始节点：企微 external_userid 对应变量名",
+    )
+    bailian_workflow_open_kfid_key: str = Field(
+        default="open_kfid",
+        validation_alias=AliasChoices(
+            "BAILIAN_WORKFLOW_OPEN_KFID_KEY", "bailian_workflow_open_kfid_key"
+        ),
+        description="开始节点：客服 open_kfid 变量名；空则不写入",
+    )
+    bailian_workflow_summary_key: str = Field(
+        default="summary",
+        validation_alias=AliasChoices(
+            "BAILIAN_WORKFLOW_SUMMARY_KEY", "bailian_workflow_summary_key"
+        ),
+        description="开始节点：summary 变量名；空则不写入",
     )
     bailian_base_url: str = Field(
         default="https://dashscope.aliyuncs.com",
