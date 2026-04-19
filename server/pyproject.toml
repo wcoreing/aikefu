@@ -18,7 +18,8 @@ dependencies = [
     "starlette",
     "httpx",
     "pydantic-settings",
-    "apscheduler"
+    "apscheduler",
+    "fastapi>=0.136.0",
 ]
 
 [project.scripts]

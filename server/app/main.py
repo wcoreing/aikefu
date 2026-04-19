@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import logging
 import sys
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
@@ -20,11 +21,6 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
-
-app = FastAPI(title="qiwei-server", version="0.1.0")
-app.include_router(wecom_router, prefix="/wecom")
-if (settings.internal_api_token or "").strip():
-    app.include_router(internal_workflows_router)
 
 
 def _mask(s: str, keep: int = 4) -> str:
@@ -44,8 +40,8 @@ def _aes_key_len(enc_key: str) -> int | None:
         return -1
 
 
-@app.on_event("startup")
-async def _startup_log() -> None:
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
     logger.info(
         "config loaded: wecom_token=%s wecom_corp_id=%s wecom_encoding_aes_key_len=%s wecom_aes_decoded_len=%s bailian_app_id=%s bailian_mode=%s redis=%s",
         bool(settings.wecom_token),
@@ -61,8 +57,29 @@ async def _startup_log() -> None:
             "internal API enabled: group_workflow=%s",
             bool(settings.bailian_group_app_id),
         )
+    yield
+
+
+app = FastAPI(title="qiwei-server", version="0.1.0", lifespan=_lifespan)
+app.include_router(wecom_router, prefix="/wecom")
+if (settings.internal_api_token or "").strip():
+    app.include_router(internal_workflows_router)
 
 
 @app.get("/healthz")
 async def healthz() -> dict[str, str]:
     return {"status": "ok"}
+
+
+def main() -> None:
+    import uvicorn
+
+    s = get_settings()
+    lvl = (s.log_level or "info").lower()
+    if lvl not in ("critical", "error", "warning", "info", "debug", "trace"):
+        lvl = "info"
+    uvicorn.run(app, host=s.host, port=s.port, log_level=lvl)
+
+
+if __name__ == "__main__":
+    main()
