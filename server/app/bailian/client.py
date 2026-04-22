@@ -89,21 +89,20 @@ class BailianAppClient:
         if self._s.bailian_invoke_mode == "workflow":
             if messages:
                 raise BailianError("workflow 模式下不支持传入 messages，请改用 agent 模式")
-            inp: Dict[str, Any] = {
-                self._s.bailian_workflow_query_key: prompt,
-                self._s.bailian_workflow_user_key: user_id or "",
+            # 工作流：按百炼工作流常见画布约定，将核心 query 放到 sys 下；
+            # 业务侧变量放到 user 下，供各节点按需读取。
+            user: Dict[str, Any] = {
+                "prompt": prompt,
+                "external_userid": user_id or "",
+                "open_kfid": open_kfid or "",
+                "summary": summary if summary is not None else "",
             }
-            inp["query"] = prompt
-            ok = (self._s.bailian_workflow_open_kfid_key or "").strip()
-            if ok:
-                inp[ok] = open_kfid or ""
-            sk = (self._s.bailian_workflow_summary_key or "").strip()
-            if sk:
-                inp[sk] = summary if summary is not None else ""
-            sess_k = (self._s.bailian_workflow_session_key or "").strip()
-            if session_id and sess_k:
-                inp[sess_k] = session_id
-            return inp
+            if session_id:
+                user["session_id"] = session_id
+            return {
+                "sys": {"query": prompt, "historyList": []},
+                "user": user,
+            }
 
         inp2: Dict[str, Any] = {}
         if messages:
