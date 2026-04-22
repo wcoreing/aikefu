@@ -93,6 +93,7 @@ class BailianAppClient:
                 self._s.bailian_workflow_query_key: prompt,
                 self._s.bailian_workflow_user_key: user_id or "",
             }
+            inp["query"] = prompt
             ok = (self._s.bailian_workflow_open_kfid_key or "").strip()
             if ok:
                 inp[ok] = open_kfid or ""
