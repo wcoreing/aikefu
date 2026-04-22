@@ -33,7 +33,12 @@ async def handle_kf_callback(
     store = store or build_store(s)
     kf = kf or WecomKFClient(s)
     bailian = bailian or BailianAppClient(s)
-
+    #打印所有参数
+    logger.info("open_kfid: %s", open_kfid)
+    logger.info("sync_token: %s", sync_token)
+    logger.info("store: %s", store)
+    logger.info("kf: %s", kf)
+    logger.info("bailian: %s", bailian)
     cursor = await store.get_kf_cursor(open_kfid)
     try:
         messages, next_cursor = await kf.sync_msg_all_pages(
