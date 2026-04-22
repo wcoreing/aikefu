@@ -102,6 +102,7 @@ class BailianAppClient:
             return {
                 "sys": {"query": prompt, "historyList": []},
                 "user": user,
+                "prompt": prompt,
             }
 
         inp2: Dict[str, Any] = {}
