@@ -151,7 +151,9 @@ class BailianAppClient:
             summary=summary,
         )
         body: Dict[str, Any] = {"input": inp, "parameters": {}, "debug": {}}
-
+        logger.info("body: %s", body)
+        logger.info("self._url: %s", self._url)
+        logger.info("self._headers(): %s", self._headers())
         last_exc: Optional[Exception] = None
         async with httpx.AsyncClient(
             timeout=self._s.bailian_http_timeout_sec
