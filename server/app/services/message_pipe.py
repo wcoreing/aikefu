@@ -47,7 +47,7 @@ async def handle_kf_callback(
 
     if next_cursor:
         await store.set_kf_cursor(open_kfid, next_cursor)
-
+    logger.info("messages: %s", messages)
     for msg in messages:
         mid = msg.get("msgid")
         origin = msg.get("origin")
