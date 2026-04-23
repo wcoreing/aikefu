@@ -26,41 +26,17 @@ def stable_kf_user_session_key(open_kfid: str, external_userid: str) -> str:
     return "kf-" + hashlib.sha256(raw).hexdigest()
 
 
-def extract_reply_text(output: Any, *, _depth: int = 0) -> str:
-    """从百炼 output 对象解析最终给客户的话术（兼容统一输出节点多种字段名）。"""
-    if _depth > 6:
-        raise BailianError("output 嵌套过深，无法解析回复")
-    if output is None:
+def _reply_text_from_output(out: Any) -> str:
+    if out is None:
         raise BailianError("百炼 output 为空")
-    if isinstance(output, str):
-        s = output.strip()
-        if not s:
-            raise BailianError("百炼 output 文本为空")
-        return s
-    if not isinstance(output, dict):
-        # DashScope SDK 的 output 往往是对象（含 .text / .session_id）
-        text = getattr(output, "text", None)
-        if isinstance(text, str) and text.strip():
-            return text.strip()
-        raise BailianError(f"百炼 output 类型异常: {type(output)}")
-
-    for key in ("text", "final_reply", "reply", "answer", "content", "message"):
-        v = output.get(key)
+    text = getattr(out, "text", None)
+    if isinstance(text, str) and text.strip():
+        return text.strip()
+    if isinstance(out, dict):
+        v = out.get("text") or out.get("content") or out.get("answer")
         if isinstance(v, str) and v.strip():
             return v.strip()
-
-    for nest in ("result", "data", "output", "response"):
-        inner = output.get(nest)
-        if isinstance(inner, dict):
-            try:
-                return extract_reply_text(inner, _depth=_depth + 1)
-            except BailianError:
-                continue
-        if isinstance(inner, str) and inner.strip():
-            return inner.strip()
-
-    keys = list(output.keys())[:24]
-    raise BailianError(f"百炼 output 中未找到可回复文本，keys={keys}")
+    raise BailianError("百炼 output 未包含可回复文本")
 
 
 class BailianAppClient:
@@ -111,7 +87,7 @@ class BailianAppClient:
             # 官方 SDK：prompt + biz_params（biz_params 键名需与开始节点参数一致）
             biz_params: Dict[str, Any] = {}
             qk = (self._s.bailian_workflow_query_key or "").strip()
-            if qk and qk != "prompt":
+            if qk:
                 biz_params[qk] = p
             uk = (self._s.bailian_workflow_user_key or "").strip()
             if uk:
@@ -176,7 +152,7 @@ class BailianAppClient:
             raise BailianError(
                 f"百炼输出为空 code={code} message={message} request_id={request_id}"
             )
-        text = extract_reply_text(getattr(out, "text", None) or out)
+        text = _reply_text_from_output(out)
         new_sid = getattr(out, "session_id", None)
         return text, (new_sid if new_sid else session_id)
 
@@ -237,7 +213,7 @@ class BailianAppClient:
             raise BailianError(
                 f"百炼输出为空 code={code} message={message} request_id={request_id}"
             )
-        text = extract_reply_text(getattr(out, "text", None) or out)
+        text = _reply_text_from_output(out)
         new_sid = getattr(out, "session_id", None)
         return text, new_sid
 
