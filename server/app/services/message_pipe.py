@@ -99,8 +99,15 @@ async def handle_kf_callback(
                     external_userid=str(external_userid),
                     content="抱歉，智能服务暂时不可用，请稍后再试。",
                 )
-            except WecomAPIError:
-                logger.exception("发送降级文案失败")
+            except WecomAPIError as we:
+                logger.exception(
+                    "发送降级文案失败 msgid=%s open_kfid=%s external_userid=%s errcode=%s errmsg=%s",
+                    mid,
+                    okfid,
+                    external_userid,
+                    we.errcode,
+                    str(we),
+                )
             continue
 
         if new_session:
@@ -114,5 +121,12 @@ async def handle_kf_callback(
                 external_userid=str(external_userid),
                 content=reply[:2048],
             )
-        except WecomAPIError:
-            logger.exception("send_msg 失败 msgid=%s", mid)
+        except WecomAPIError as we:
+            logger.exception(
+                "send_msg 失败 msgid=%s open_kfid=%s external_userid=%s errcode=%s errmsg=%s",
+                mid,
+                okfid,
+                external_userid,
+                we.errcode,
+                str(we),
+            )
