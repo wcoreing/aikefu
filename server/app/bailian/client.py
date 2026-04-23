@@ -1,12 +1,10 @@
-"""阿里云百炼应用（DashScope HTTP）：支持纯 Agent 与方案1 工作流入参。"""
+"""阿里云百炼应用（DashScope SDK）：支持 Agent / 工作流应用调用。"""
 
 from __future__ import annotations
 
 import hashlib
 import logging
 from typing import Any, Dict, List, Optional
-
-import httpx
 
 from app.config import Settings, get_settings
 
@@ -40,6 +38,10 @@ def extract_reply_text(output: Any, *, _depth: int = 0) -> str:
             raise BailianError("百炼 output 文本为空")
         return s
     if not isinstance(output, dict):
+        # DashScope SDK 的 output 往往是对象（含 .text / .session_id）
+        text = getattr(output, "text", None)
+        if isinstance(text, str) and text.strip():
+            return text.strip()
         raise BailianError(f"百炼 output 类型异常: {type(output)}")
 
     for key in ("text", "final_reply", "reply", "answer", "content", "message"):
@@ -64,64 +66,13 @@ def extract_reply_text(output: Any, *, _depth: int = 0) -> str:
 class BailianAppClient:
     def __init__(self, settings: Optional[Settings] = None) -> None:
         self._s = settings or get_settings()
-        base = self._s.bailian_base_url.rstrip("/")
-        if not self._s.bailian_app_id:
-            self._url = ""
-        else:
-            self._url = f"{base}/api/v1/apps/{self._s.bailian_app_id}/completion"
 
-    def _headers(self) -> Dict[str, str]:
-        return {
-            "Authorization": f"Bearer {self._s.dashscope_api_key}",
-            "Content-Type": "application/json",
-        }
-
-    def _build_input(
-        self,
-        *,
-        prompt: str,
-        session_id: Optional[str],
-        user_id: Optional[str],
-        messages: Optional[List[Dict[str, Any]]],
-        open_kfid: Optional[str],
-        summary: Optional[str],
-    ) -> Dict[str, Any]:
-        if self._s.bailian_invoke_mode == "workflow":
-            if messages:
-                raise BailianError("workflow 模式下不支持传入 messages，请改用 agent 模式")
-            # 官方 HTTP：input.prompt + input.biz_params
-            # biz_params 的键名/类型必须与「开始节点」自定义参数完全一致；未在开始节点声明的字段不要塞入。
-            biz: Dict[str, Any] = {}
-            qk = (self._s.bailian_workflow_query_key or "").strip()
-            if qk and qk not in ("prompt", "Prompt"):
-                biz[qk] = prompt
-            uk = (self._s.bailian_workflow_user_key or "").strip()
-            if uk:
-                biz[uk] = user_id or ""
-            ok = (self._s.bailian_workflow_open_kfid_key or "").strip()
-            if ok:
-                biz[ok] = open_kfid or ""
-            sk = (self._s.bailian_workflow_summary_key or "").strip()
-            if sk:
-                biz[sk] = summary if summary is not None else ""
-            sess_k = (self._s.bailian_workflow_session_key or "").strip()
-            if session_id and sess_k:
-                biz[sess_k] = session_id
-            return {"prompt": prompt, "biz_params": biz}
-
-        inp2: Dict[str, Any] = {}
-        if messages:
-            inp2["messages"] = messages
-        else:
-            # 国内版校验常报 Required parameter(Prompt)；文档/SDK 多为小写 prompt：两者同传兼容
-            inp2["prompt"] = prompt
-            inp2["Prompt"] = prompt
-            extra = (self._s.bailian_agent_prompt_key or "").strip()
-            if extra and extra not in ("prompt", "Prompt"):
-                inp2[extra] = prompt
-        if session_id:
-            inp2["session_id"] = session_id
-        return inp2
+    def _mask(self, s: str, keep: int = 4) -> str:
+        if not s:
+            return ""
+        if len(s) <= keep:
+            return "*" * len(s)
+        return f"{s[:keep]}****"
 
     async def chat(
         self,
@@ -135,10 +86,10 @@ class BailianAppClient:
     ) -> tuple[str, Optional[str]]:
         """
         返回 (reply_text, session_id)。
-        workflow：HTTP 为 input.prompt + input.biz_params（biz_params 与开始节点自定义参数对齐）。
+        workflow：SDK 为 prompt + biz_params（biz_params 与开始节点自定义参数对齐）。
         agent：input 为 prompt + session_id。
         """
-        if not self._url:
+        if not (self._s.bailian_app_id or "").strip():
             raise BailianError("BAILIAN_APP_ID 未配置")
         if not self._s.dashscope_api_key:
             raise BailianError("DASHSCOPE_API_KEY 未配置")
@@ -147,91 +98,87 @@ class BailianAppClient:
         if not p and not messages:
             raise BailianError("prompt 为空，无法调用百炼")
 
-        # 优先使用官方 DashScope Python SDK（与文档示例一致：prompt + biz_params / session_id）
-        try:
-            from dashscope import Application  # type: ignore
+        from dashscope import Application  # type: ignore
 
-            if messages:
-                # 当前项目未使用 messages 方式；若需要可在此扩展为 SDK 的 messages 入参（按官方 API）。
-                raise BailianError("当前实现未启用 messages 入参，请使用 prompt/session_id 方式")
+        if messages:
+            raise BailianError("当前实现未启用 messages 入参，请使用 prompt/session_id 方式")
 
-            biz_params: Optional[Dict[str, Any]] = None
-            if self._s.bailian_invoke_mode == "workflow":
-                inp = self._build_input(
-                    prompt=p,
-                    session_id=session_id,
-                    user_id=user_id,
-                    messages=None,
-                    open_kfid=open_kfid,
-                    summary=summary,
-                )
-                biz_params = inp.get("biz_params") if isinstance(inp, dict) else None
-                resp = Application.call(
-                    api_key=self._s.dashscope_api_key,
-                    app_id=self._s.bailian_app_id,
-                    prompt=p,
-                    biz_params=biz_params,
-                )
-            else:
-                resp = Application.call(
-                    api_key=self._s.dashscope_api_key,
-                    app_id=self._s.bailian_app_id,
-                    prompt=p,
-                    session_id=session_id,
-                )
+        mode = self._s.bailian_invoke_mode
+        app_id = (self._s.bailian_app_id or "").strip()
+        masked_app = self._mask(app_id)
 
-            # SDK 响应对象结构：通常可通过 output.text / output.session_id 访问
-            out = getattr(resp, "output", None)
-            if out is None:
-                msg = getattr(resp, "message", None) or getattr(resp, "code", None) or str(resp)
-                raise BailianError(f"百炼错误: {msg}")
-            text = extract_reply_text(getattr(out, "text", None) or out)
-            new_sid = getattr(out, "session_id", None)
-            return text, (new_sid if new_sid else session_id)
-        except BailianError:
-            raise
-        except Exception as e:  # noqa: BLE001
-            # SDK 不可用或调用异常时，回退 HTTP（保留原能力，便于排障）
-            logger.warning("dashscope sdk 调用失败，回退 HTTP: %s", e)
+        if mode == "workflow":
+            # 官方 SDK：prompt + biz_params（biz_params 键名需与开始节点参数一致）
+            biz_params: Dict[str, Any] = {}
+            qk = (self._s.bailian_workflow_query_key or "").strip()
+            if qk and qk != "prompt":
+                biz_params[qk] = p
+            uk = (self._s.bailian_workflow_user_key or "").strip()
+            if uk:
+                biz_params[uk] = user_id or ""
+            ok = (self._s.bailian_workflow_open_kfid_key or "").strip()
+            if ok:
+                biz_params[ok] = open_kfid or ""
+            sk = (self._s.bailian_workflow_summary_key or "").strip()
+            if sk:
+                biz_params[sk] = summary if summary is not None else ""
+            sess_k = (self._s.bailian_workflow_session_key or "").strip()
+            if session_id and sess_k:
+                biz_params[sess_k] = session_id
+            biz_keys = sorted(list((biz_params or {}).keys()))[:32]
+            logger.info(
+                "bailian sdk call workflow app_id=%s prompt_len=%s session=%s biz_keys=%s",
+                masked_app,
+                len(p),
+                bool(session_id),
+                biz_keys,
+            )
+            resp = Application.call(
+                api_key=self._s.dashscope_api_key,
+                app_id=app_id,
+                prompt=p,
+                biz_params=biz_params or None,
+            )
+        else:
+            logger.info(
+                "bailian sdk call agent app_id=%s prompt_len=%s session=%s",
+                masked_app,
+                len(p),
+                bool(session_id),
+            )
+            resp = Application.call(
+                api_key=self._s.dashscope_api_key,
+                app_id=app_id,
+                prompt=p,
+                session_id=session_id,
+            )
 
-        inp = self._build_input(
-            prompt=p,
-            session_id=session_id,
-            user_id=user_id,
-            messages=messages,
-            open_kfid=open_kfid,
-            summary=summary,
+        status = getattr(resp, "status_code", None)
+        request_id = getattr(resp, "request_id", None)
+        code = getattr(resp, "code", None)
+        message = getattr(resp, "message", None)
+        logger.info(
+            "bailian sdk response app_id=%s status=%s request_id=%s code=%s",
+            masked_app,
+            status,
+            request_id,
+            code,
         )
-        body: Dict[str, Any] = {"input": inp, "parameters": {}, "debug": {}}
-        logger.debug("bailian completion url=%s", self._url)
-        last_exc: Optional[Exception] = None
-        async with httpx.AsyncClient(timeout=self._s.bailian_http_timeout_sec) as client:
-            for attempt in range(self._s.bailian_max_retries + 1):
-                try:
-                    r = await client.post(self._url, headers=self._headers(), json=body)
-                    if r.status_code >= 400:
-                        raise BailianError(
-                            f"HTTP {r.status_code}: {r.text[:500]}",
-                            status_code=r.status_code,
-                        )
-                    data = r.json()
-                    out = data.get("output")
-                    if out is None:
-                        code = data.get("code") or data.get("message")
-                        raise BailianError(f"百炼错误: {code or data!r:.400}")
-                    text = extract_reply_text(out)
-                    new_sid = None
-                    if isinstance(out, dict):
-                        new_sid = out.get("session_id")
-                    return text, new_sid if new_sid else session_id
-                except (httpx.TimeoutException, httpx.TransportError) as e:
-                    last_exc = e
-                    logger.warning("bailian request retry %s: %s", attempt, e)
-        raise BailianError(f"百炼请求失败: {last_exc}") from last_exc
 
-    def _completion_url(self, app_id: str) -> str:
-        base = self._s.bailian_base_url.rstrip("/")
-        return f"{base}/api/v1/apps/{app_id}/completion"
+        if status is not None and int(status) != 200:
+            raise BailianError(
+                f"HTTP {status}: {code or ''} {message or ''} (request_id={request_id})".strip(),
+                status_code=int(status),
+            )
+
+        out = getattr(resp, "output", None)
+        if out is None:
+            raise BailianError(
+                f"百炼输出为空 code={code} message={message} request_id={request_id}"
+            )
+        text = extract_reply_text(getattr(out, "text", None) or out)
+        new_sid = getattr(out, "session_id", None)
+        return text, (new_sid if new_sid else session_id)
 
     async def invoke_app_completion(
         self,
@@ -239,43 +186,60 @@ class BailianAppClient:
         app_id: str,
         input_obj: Dict[str, Any],
     ) -> tuple[str, Optional[str]]:
-        """调用任意应用 ID（如群发工作流），自定义 input 字典。"""
+        """调用任意应用 ID（SDK 版本）。input_obj 支持 prompt / biz_params / session_id。"""
         if not app_id:
             raise BailianError("app_id 为空")
         if not self._s.dashscope_api_key:
             raise BailianError("DASHSCOPE_API_KEY 未配置")
-        url = self._completion_url(app_id)
-        body: Dict[str, Any] = {"input": input_obj, "parameters": {}, "debug": {}}
-        last_exc: Optional[Exception] = None
-        async with httpx.AsyncClient(
-            timeout=self._s.bailian_http_timeout_sec
-        ) as client:
-            for attempt in range(self._s.bailian_max_retries + 1):
-                try:
-                    r = await client.post(
-                        url,
-                        headers=self._headers(),
-                        json=body,
-                    )
-                    if r.status_code >= 400:
-                        raise BailianError(
-                            f"HTTP {r.status_code}: {r.text[:500]}",
-                            status_code=r.status_code,
-                        )
-                    data = r.json()
-                    out = data.get("output")
-                    if out is None:
-                        code = data.get("code") or data.get("message")
-                        raise BailianError(f"百炼错误: {code or data!r:.400}")
-                    text = extract_reply_text(out)
-                    new_sid = None
-                    if isinstance(out, dict):
-                        new_sid = out.get("session_id")
-                    return text, new_sid
-                except (httpx.TimeoutException, httpx.TransportError) as e:
-                    last_exc = e
-                    logger.warning("bailian invoke_app retry %s: %s", attempt, e)
-        raise BailianError(f"百炼请求失败: {last_exc}") from last_exc
+
+        from dashscope import Application  # type: ignore
+
+        prompt = (input_obj.get("prompt") or "").strip()
+        if not prompt:
+            raise BailianError("input_obj.prompt 为空")
+        biz_params = input_obj.get("biz_params")
+        session_id = input_obj.get("session_id")
+
+        masked_app = self._mask(app_id)
+        biz_keys = sorted(list((biz_params or {}).keys()))[:32] if isinstance(biz_params, dict) else []
+        logger.info(
+            "bailian sdk invoke app_id=%s prompt_len=%s session=%s biz_keys=%s",
+            masked_app,
+            len(prompt),
+            bool(session_id),
+            biz_keys,
+        )
+        resp = Application.call(
+            api_key=self._s.dashscope_api_key,
+            app_id=app_id,
+            prompt=prompt,
+            biz_params=biz_params if isinstance(biz_params, dict) else None,
+            session_id=session_id,
+        )
+        status = getattr(resp, "status_code", None)
+        request_id = getattr(resp, "request_id", None)
+        code = getattr(resp, "code", None)
+        message = getattr(resp, "message", None)
+        logger.info(
+            "bailian sdk invoke response app_id=%s status=%s request_id=%s code=%s",
+            masked_app,
+            status,
+            request_id,
+            code,
+        )
+        if status is not None and int(status) != 200:
+            raise BailianError(
+                f"HTTP {status}: {code or ''} {message or ''} (request_id={request_id})".strip(),
+                status_code=int(status),
+            )
+        out = getattr(resp, "output", None)
+        if out is None:
+            raise BailianError(
+                f"百炼输出为空 code={code} message={message} request_id={request_id}"
+            )
+        text = extract_reply_text(getattr(out, "text", None) or out)
+        new_sid = getattr(out, "session_id", None)
+        return text, new_sid
 
     async def invoke_group_workflow(self, *, tag: str, content: str) -> str:
         """群发极简工作流：开始节点仅 tag + content。"""
@@ -283,8 +247,11 @@ class BailianAppClient:
         if not aid:
             raise BailianError("BAILIAN_GROUP_APP_ID 未配置")
         inp = {
-            self._s.bailian_group_tag_key: tag,
-            self._s.bailian_group_content_key: content,
+            "prompt": content,
+            "biz_params": {
+                self._s.bailian_group_tag_key: tag,
+                self._s.bailian_group_content_key: content,
+            },
         }
         text, _ = await self.invoke_app_completion(app_id=aid, input_obj=inp)
         return text
