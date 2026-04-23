@@ -17,6 +17,7 @@ dependencies = [
     "uvicorn",
     "starlette",
     "httpx",
+    "dashscope",
     "pydantic-settings",
     "apscheduler",
     "fastapi>=0.136.0",

@@ -147,6 +147,53 @@ class BailianAppClient:
         if not p and not messages:
             raise BailianError("prompt 为空，无法调用百炼")
 
+        # 优先使用官方 DashScope Python SDK（与文档示例一致：prompt + biz_params / session_id）
+        try:
+            from dashscope import Application  # type: ignore
+
+            if messages:
+                # 当前项目未使用 messages 方式；若需要可在此扩展为 SDK 的 messages 入参（按官方 API）。
+                raise BailianError("当前实现未启用 messages 入参，请使用 prompt/session_id 方式")
+
+            biz_params: Optional[Dict[str, Any]] = None
+            if self._s.bailian_invoke_mode == "workflow":
+                inp = self._build_input(
+                    prompt=p,
+                    session_id=session_id,
+                    user_id=user_id,
+                    messages=None,
+                    open_kfid=open_kfid,
+                    summary=summary,
+                )
+                biz_params = inp.get("biz_params") if isinstance(inp, dict) else None
+                resp = Application.call(
+                    api_key=self._s.dashscope_api_key,
+                    app_id=self._s.bailian_app_id,
+                    prompt=p,
+                    biz_params=biz_params,
+                )
+            else:
+                resp = Application.call(
+                    api_key=self._s.dashscope_api_key,
+                    app_id=self._s.bailian_app_id,
+                    prompt=p,
+                    session_id=session_id,
+                )
+
+            # SDK 响应对象结构：通常可通过 output.text / output.session_id 访问
+            out = getattr(resp, "output", None)
+            if out is None:
+                msg = getattr(resp, "message", None) or getattr(resp, "code", None) or str(resp)
+                raise BailianError(f"百炼错误: {msg}")
+            text = extract_reply_text(getattr(out, "text", None) or out)
+            new_sid = getattr(out, "session_id", None)
+            return text, (new_sid if new_sid else session_id)
+        except BailianError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            # SDK 不可用或调用异常时，回退 HTTP（保留原能力，便于排障）
+            logger.warning("dashscope sdk 调用失败，回退 HTTP: %s", e)
+
         inp = self._build_input(
             prompt=p,
             session_id=session_id,
@@ -158,16 +205,10 @@ class BailianAppClient:
         body: Dict[str, Any] = {"input": inp, "parameters": {}, "debug": {}}
         logger.debug("bailian completion url=%s", self._url)
         last_exc: Optional[Exception] = None
-        async with httpx.AsyncClient(
-            timeout=self._s.bailian_http_timeout_sec
-        ) as client:
+        async with httpx.AsyncClient(timeout=self._s.bailian_http_timeout_sec) as client:
             for attempt in range(self._s.bailian_max_retries + 1):
                 try:
-                    r = await client.post(
-                        self._url,
-                        headers=self._headers(),
-                        json=body,
-                    )
+                    r = await client.post(self._url, headers=self._headers(), json=body)
                     if r.status_code >= 400:
                         raise BailianError(
                             f"HTTP {r.status_code}: {r.text[:500]}",
