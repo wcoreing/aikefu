@@ -89,21 +89,25 @@ class BailianAppClient:
         if self._s.bailian_invoke_mode == "workflow":
             if messages:
                 raise BailianError("workflow 模式下不支持传入 messages，请改用 agent 模式")
-            # 工作流：按百炼工作流常见画布约定，将核心 query 放到 sys 下；
-            # 业务侧变量放到 user 下，供各节点按需读取。
-            user: Dict[str, Any] = {
-                "prompt": prompt,
-                "external_userid": user_id or "",
-                "open_kfid": open_kfid or "",
-                "summary": summary if summary is not None else "",
-            }
-            if session_id:
-                user["session_id"] = session_id
-            return {
-                "sys": {"query": prompt, "historyList": []},
-                "user": user,
-                "prompt": prompt,
-            }
+            # 官方 HTTP：input.prompt + input.biz_params
+            # biz_params 的键名/类型必须与「开始节点」自定义参数完全一致；未在开始节点声明的字段不要塞入。
+            biz: Dict[str, Any] = {}
+            qk = (self._s.bailian_workflow_query_key or "").strip()
+            if qk and qk not in ("prompt", "Prompt"):
+                biz[qk] = prompt
+            uk = (self._s.bailian_workflow_user_key or "").strip()
+            if uk:
+                biz[uk] = user_id or ""
+            ok = (self._s.bailian_workflow_open_kfid_key or "").strip()
+            if ok:
+                biz[ok] = open_kfid or ""
+            sk = (self._s.bailian_workflow_summary_key or "").strip()
+            if sk:
+                biz[sk] = summary if summary is not None else ""
+            sess_k = (self._s.bailian_workflow_session_key or "").strip()
+            if session_id and sess_k:
+                biz[sess_k] = session_id
+            return {"prompt": prompt, "biz_params": biz}
 
         inp2: Dict[str, Any] = {}
         if messages:
@@ -131,7 +135,7 @@ class BailianAppClient:
     ) -> tuple[str, Optional[str]]:
         """
         返回 (reply_text, session_id)。
-        workflow：input 与开始节点变量一致（如 query、external_userid、open_kfid、summary）。
+        workflow：HTTP 为 input.prompt + input.biz_params（biz_params 与开始节点自定义参数对齐）。
         agent：input 为 prompt + session_id。
         """
         if not self._url:
@@ -152,9 +156,7 @@ class BailianAppClient:
             summary=summary,
         )
         body: Dict[str, Any] = {"input": inp, "parameters": {}, "debug": {}}
-        logger.info("body: %s", body)
-        logger.info("self._url: %s", self._url)
-        logger.info("self._headers(): %s", self._headers())
+        logger.debug("bailian completion url=%s", self._url)
         last_exc: Optional[Exception] = None
         async with httpx.AsyncClient(
             timeout=self._s.bailian_http_timeout_sec
