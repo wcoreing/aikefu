@@ -161,7 +161,6 @@ class Settings(BaseSettings):
         description="北京地域默认；国际版用 https://dashscope-intl.aliyuncs.com",
     )
     bailian_http_timeout_sec: float = Field(default=60.0)
-    bailian_max_retries: int = Field(default=2)
 
     bailian_group_app_id: str = Field(
         default="",

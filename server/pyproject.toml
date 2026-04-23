@@ -18,6 +18,7 @@ dependencies = [
     "starlette",
     "httpx",
     "dashscope",
+    "redis",
     "pydantic-settings",
     "apscheduler",
     "fastapi>=0.136.0",
