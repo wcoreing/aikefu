@@ -17,8 +17,15 @@ _QYAPI = "https://qyapi.weixin.qq.com"
 
 
 class WecomAPIError(Exception):
-    def __init__(self, message: str, errcode: Optional[int] = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        errcode: Optional[int] = None,
+        api: Optional[str] = None,
+    ) -> None:
         self.errcode = errcode
+        self.api = api
         super().__init__(message)
 
 
@@ -37,7 +44,10 @@ class WecomKFClient:
             if self._token and now < self._token_expires_at - 120:
                 return self._token
             if not self._s.wecom_corp_id or not self._s.wecom_corp_secret:
-                raise WecomAPIError("WECOM_CORP_ID / WECOM_CORP_SECRET 未配置")
+                raise WecomAPIError(
+                    "WECOM_CORP_ID / WECOM_CORP_SECRET 未配置",
+                    api="/cgi-bin/gettoken",
+                )
             url = f"{_QYAPI}/cgi-bin/gettoken"
             r = await client.get(
                 url,
@@ -52,6 +62,7 @@ class WecomKFClient:
                 raise WecomAPIError(
                     data.get("errmsg", "gettoken failed"),
                     errcode=data.get("errcode"),
+                    api="/cgi-bin/gettoken",
                 )
             self._token = data["access_token"]
             self._token_expires_at = now + int(data.get("expires_in", 7200))
@@ -82,6 +93,7 @@ class WecomKFClient:
                 raise WecomAPIError(
                     data.get("errmsg", "sync_msg failed"),
                     errcode=data.get("errcode"),
+                    api="/cgi-bin/kf/sync_msg",
                 )
             return data
 
@@ -111,6 +123,7 @@ class WecomKFClient:
                 raise WecomAPIError(
                     data.get("errmsg", "send_msg failed"),
                     errcode=data.get("errcode"),
+                    api="/cgi-bin/kf/send_msg",
                 )
             return data
 
@@ -168,6 +181,7 @@ class WecomKFClient:
                 raise WecomAPIError(
                     data.get("errmsg", "service_state/trans failed"),
                     errcode=data.get("errcode"),
+                    api="/cgi-bin/kf/service_state/trans",
                 )
             return data
 
@@ -195,6 +209,7 @@ class WecomKFClient:
                 raise WecomAPIError(
                     data.get("errmsg", "service_state/get failed"),
                     errcode=data.get("errcode"),
+                    api="/cgi-bin/kf/service_state/get",
                 )
             return data
 
@@ -207,7 +222,10 @@ class WecomKFClient:
     ) -> Dict[str, Any]:
         """应用发消息到企业成员（文本），用于通知销售等。"""
         if not agentid:
-            raise WecomAPIError("WECOM_AGENT_ID 未配置")
+            raise WecomAPIError(
+                "WECOM_AGENT_ID 未配置",
+                api="/cgi-bin/message/send",
+            )
         async with httpx.AsyncClient(timeout=30.0) as client:
             access = await self._ensure_token(client)
             payload: Dict[str, Any] = {
@@ -227,5 +245,6 @@ class WecomKFClient:
                 raise WecomAPIError(
                     data.get("errmsg", "message/send failed"),
                     errcode=data.get("errcode"),
+                    api="/cgi-bin/message/send",
                 )
             return data

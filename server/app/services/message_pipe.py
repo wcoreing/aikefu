@@ -141,7 +141,8 @@ async def handle_kf_callback(
                 )
             except WecomAPIError as we:
                 logger.exception(
-                    "发送降级文案失败 msgid=%s open_kfid=%s external_userid=%s errcode=%s errmsg=%s",
+                    "发送降级文案失败 api=%s msgid=%s open_kfid=%s external_userid=%s errcode=%s errmsg=%s",
+                    we.api,
                     mid,
                     okfid,
                     external_userid,
@@ -169,7 +170,15 @@ async def handle_kf_callback(
                         external_userid=str(external_userid),
                     )
                     logger.error(
-                        "send_msg session invalid: msgid=%s open_kfid=%s external_userid=%s service_state=%s servicer_userid=%s",
+                        "session invalid(api=%s): msgid=%s open_kfid=%s external_userid=%s",
+                        we.api,
+                        mid,
+                        okfid,
+                        external_userid,
+                    )
+                    logger.error(
+                        "service_state_get resp api=%s msgid=%s open_kfid=%s external_userid=%s service_state=%s servicer_userid=%s",
+                        "/cgi-bin/kf/service_state/get",
                         mid,
                         okfid,
                         external_userid,
@@ -178,7 +187,8 @@ async def handle_kf_callback(
                     )
                 except WecomAPIError as se:
                     logger.error(
-                        "send_msg session invalid but state_get failed: msgid=%s open_kfid=%s external_userid=%s errcode=%s errmsg=%s",
+                        "send_msg session invalid but state_get failed api=%s msgid=%s open_kfid=%s external_userid=%s errcode=%s errmsg=%s",
+                        se.api,
                         mid,
                         okfid,
                         external_userid,
@@ -186,7 +196,8 @@ async def handle_kf_callback(
                         str(se),
                     )
             logger.exception(
-                "send_msg 失败 msgid=%s open_kfid=%s external_userid=%s errcode=%s errmsg=%s",
+                "send_msg 失败 api=%s msgid=%s open_kfid=%s external_userid=%s errcode=%s errmsg=%s",
+                we.api,
                 mid,
                 okfid,
                 external_userid,
