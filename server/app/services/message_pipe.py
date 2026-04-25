@@ -156,6 +156,38 @@ async def handle_kf_callback(
                 okfid, str(external_userid), str(new_session)
             )
 
+        # 发送前先判断会话状态，避免人工接待/已结束等状态下触发 95018
+        # service_state: 0 未处理 / 1 智能助手接待 -> 允许 API 回复
+        #               2 待接入池排队 / 3 人工接待 / 4 已结束/未开始 -> 跳过发送
+        try:
+            st = await kf.service_state_get(
+                open_kfid=str(okfid),
+                external_userid=str(external_userid),
+            )
+            ss = st.get("service_state")
+            if ss not in (0, 1):
+                logger.warning(
+                    "skip send_msg by service_state api=%s msgid=%s open_kfid=%s external_userid=%s service_state=%s servicer_userid=%s",
+                    "/cgi-bin/kf/service_state/get",
+                    mid,
+                    okfid,
+                    external_userid,
+                    ss,
+                    st.get("servicer_userid"),
+                )
+                continue
+        except WecomAPIError as se:
+            # 获取状态失败时仍尝试发送，但把接口与错误原因打全，便于后续排障
+            logger.error(
+                "service_state_get failed api=%s msgid=%s open_kfid=%s external_userid=%s errcode=%s errmsg=%s",
+                se.api,
+                mid,
+                okfid,
+                external_userid,
+                se.errcode,
+                str(se),
+            )
+
         try:
             await kf.send_text(
                 open_kfid=okfid,
