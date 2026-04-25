@@ -12,7 +12,7 @@ import uvicorn
 from app.config import get_settings
 from app.services.group_broadcast import send_group_msg_by_tag as run_group_broadcast
 from app.wecom.api import WecomAPIError, WecomKFClient
-from app.wecom.contact_client import WecomContactAPIError
+from app.wecom.contact_client import WecomContactAPIError, WecomContactClient
 
 logging.basicConfig(
     level=logging.INFO,
@@ -57,8 +57,24 @@ async def notify_sales(
     """
     s = get_settings()
     kf = WecomKFClient(s)
+    contact = WecomContactClient(s)
+
+    # 尝试补全客户信息（名称/企业等），失败则不影响通知发送
+    customer_name = ""
+    customer_corp = ""
+    try:
+        detail = await contact.get_external_contact(external_userid)
+        ec = detail.get("external_contact") or {}
+        customer_name = str(ec.get("name") or "").strip()
+        customer_corp = str(ec.get("corp_name") or "").strip()
+    except Exception:  # noqa: BLE001
+        customer_name = ""
+        customer_corp = ""
+
+    name_line = f"客户名称：{customer_name}\n" if customer_name else ""
+    corp_line = f"客户企业：{customer_corp}\n" if customer_corp else ""
     detail = (
-        f"【高意向客户】\n客户 external_userid：{external_userid}\n"
+        f"【高意向客户】\n{name_line}{corp_line}客户 external_userid：{external_userid}\n"
         f"客服账号 open_kfid：{open_kfid}\n摘要：{summary or '（无）'}"
     )
     notified = False
