@@ -33,6 +33,7 @@ async def notify_sales(
     external_userid: str,
     open_kfid: str,
     summary: str = "",
+    question: str = "",
 ) -> dict:
     """
     高意向通知销售（工作流高意向分支调用）。
@@ -45,6 +46,7 @@ async def notify_sales(
     - external_userid: 企微微信客户 external_userid（用于在提醒中标识客户）
     - open_kfid: 客服账号 open_kfid（用于在提醒中标识会话来源）
     - summary: 可选摘要（建议由工作流/LLM 生成 1~2 句）
+    - question:（可选）客户本次提问/原始消息（建议传入工作流 prompt）
 
     依赖配置（必须在 `.env` 配好）：
     - WECOM_AGENT_ID: 自建应用 AgentId（整数）
@@ -62,19 +64,35 @@ async def notify_sales(
     # 尝试补全客户信息（名称/企业等），失败则不影响通知发送
     customer_name = ""
     customer_corp = ""
+    customer_remark = ""
+    customer_mobile = ""
     try:
         detail = await contact.get_external_contact(external_userid)
         ec = detail.get("external_contact") or {}
         customer_name = str(ec.get("name") or "").strip()
         customer_corp = str(ec.get("corp_name") or "").strip()
+        customer_remark = str(ec.get("remark") or "").strip()
+        mobiles = ec.get("remark_mobiles") or []
+        if isinstance(mobiles, list) and mobiles:
+            customer_mobile = str(mobiles[0] or "").strip()
     except Exception:  # noqa: BLE001
         customer_name = ""
         customer_corp = ""
+        customer_remark = ""
+        customer_mobile = ""
 
     name_line = f"客户名称：{customer_name}\n" if customer_name else ""
     corp_line = f"客户企业：{customer_corp}\n" if customer_corp else ""
+    remark_line = f"客户备注：{customer_remark}\n" if customer_remark else ""
+    if customer_mobile and len(customer_mobile) >= 7:
+        mobile_masked = customer_mobile[:3] + "****" + customer_mobile[-4:]
+    else:
+        mobile_masked = customer_mobile
+    mobile_line = f"客户手机号：{mobile_masked}\n" if mobile_masked else ""
+    q = (question or "").strip()
+    question_line = f"客户问题：{q}\n" if q else ""
     detail = (
-        f"【高意向客户】\n{name_line}{corp_line}客户 external_userid：{external_userid}\n"
+        f"【高意向客户】\n{name_line}{remark_line}{mobile_line}{corp_line}{question_line}客户 external_userid：{external_userid}\n"
         f"客服账号 open_kfid：{open_kfid}\n摘要：{summary or '（无）'}"
     )
     notified = False
