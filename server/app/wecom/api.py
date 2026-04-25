@@ -171,6 +171,33 @@ class WecomKFClient:
                 )
             return data
 
+    async def service_state_get(
+        self,
+        *,
+        open_kfid: str,
+        external_userid: str,
+    ) -> Dict[str, Any]:
+        """获取微信客服会话状态：/cgi-bin/kf/service_state/get"""
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            access = await self._ensure_token(client)
+            body: Dict[str, Any] = {
+                "open_kfid": open_kfid,
+                "external_userid": external_userid,
+            }
+            r = await client.post(
+                f"{_QYAPI}/cgi-bin/kf/service_state/get",
+                params={"access_token": access},
+                json=body,
+            )
+            r.raise_for_status()
+            data = r.json()
+            if data.get("errcode", 0) != 0:
+                raise WecomAPIError(
+                    data.get("errmsg", "service_state/get failed"),
+                    errcode=data.get("errcode"),
+                )
+            return data
+
     async def send_application_text(
         self,
         *,

@@ -53,6 +53,34 @@ async def handle_kf_callback(
     if next_cursor:
         await store.set_kf_cursor(open_kfid, next_cursor)
     logger.info("messages: %s", messages)
+
+    # Redis 数据丢失/首次对话场景兜底：当某个客户没有 session_id 时，只处理该客户最新一条客户文本，
+    # 避免 cursor/claim 丢失导致历史消息全部重放。
+    latest_mid_by_user: dict[tuple[str, str], str] = {}
+    latest_ts_by_user: dict[tuple[str, str], int] = {}
+    for msg in messages:
+        if msg.get("origin") != _ORIGIN_CUSTOMER:
+            continue
+        if msg.get("msgtype") != "text":
+            continue
+        text_obj = msg.get("text") or {}
+        content = text_obj.get("content")
+        if not content or not isinstance(content, str):
+            continue
+        external_userid = msg.get("external_userid")
+        mid = msg.get("msgid")
+        okfid0 = msg.get("open_kfid") or open_kfid
+        if not external_userid or not mid:
+            continue
+        key = (str(okfid0), str(external_userid))
+        try:
+            ts = int(msg.get("send_time") or 0)
+        except Exception:  # noqa: BLE001
+            ts = 0
+        if key not in latest_mid_by_user or ts >= latest_ts_by_user.get(key, -1):
+            latest_mid_by_user[key] = str(mid)
+            latest_ts_by_user[key] = ts
+
     for msg in messages:
         mid = msg.get("msgid")
         origin = msg.get("origin")
@@ -74,6 +102,18 @@ async def handle_kf_callback(
             continue
 
         prev_session = await store.get_bailian_session(okfid, str(external_userid))
+        if not prev_session:
+            key = (str(okfid), str(external_userid))
+            latest_mid = latest_mid_by_user.get(key)
+            if latest_mid and str(mid) != latest_mid:
+                logger.info(
+                    "skip replay msg(no session): msgid=%s latest_msgid=%s open_kfid=%s external_userid=%s",
+                    mid,
+                    latest_mid,
+                    okfid,
+                    external_userid,
+                )
+                continue
         if s.bailian_invoke_mode == "workflow":
             session_for_bailian = prev_session or stable_kf_user_session_key(
                 okfid, str(external_userid)
@@ -122,6 +162,29 @@ async def handle_kf_callback(
                 content=reply[:2048],
             )
         except WecomAPIError as we:
+            if we.errcode == 95018:
+                try:
+                    st = await kf.service_state_get(
+                        open_kfid=str(okfid),
+                        external_userid=str(external_userid),
+                    )
+                    logger.error(
+                        "send_msg session invalid: msgid=%s open_kfid=%s external_userid=%s service_state=%s servicer_userid=%s",
+                        mid,
+                        okfid,
+                        external_userid,
+                        st.get("service_state"),
+                        st.get("servicer_userid"),
+                    )
+                except WecomAPIError as se:
+                    logger.error(
+                        "send_msg session invalid but state_get failed: msgid=%s open_kfid=%s external_userid=%s errcode=%s errmsg=%s",
+                        mid,
+                        okfid,
+                        external_userid,
+                        se.errcode,
+                        str(se),
+                    )
             logger.exception(
                 "send_msg 失败 msgid=%s open_kfid=%s external_userid=%s errcode=%s errmsg=%s",
                 mid,
