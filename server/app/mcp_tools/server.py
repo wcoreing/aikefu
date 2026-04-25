@@ -23,7 +23,7 @@ logging.basicConfig(
 mcp = FastMCP("qiwei-wecom")
 
 REPLY_NOTIFY = "已为您同步专属销售顾问，会尽快联系您~"
-REPLY_TRANSFER = "已为您转接人工客服，请稍候~"
+REPLY_TRANSFER = "已通知人工客服为您接入，请稍候~"
 
 # ------------------------------
 # 工具定义（完全不变）
@@ -111,9 +111,31 @@ async def notify_sales(
     else:
         err = "未配置 WECOM_AGENT_ID 或 WECOM_NOTIFY_TOUSER，跳过内部通知"
         logging.getLogger(__name__).warning("%s", err)
-    out = {"reply": REPLY_NOTIFY, "notified": notified}
+    # 高意向场景下：通知内部后会转人工，因此默认回客户“已通知人工客服”
+    out = {"reply": REPLY_TRANSFER, "notified": notified, "notify_reply": REPLY_NOTIFY}
     if err:
         out["warning"] = err
+
+    # 通知后转人工：优先转指定接待人，否则进入待接入池
+    serv = (s.wecom_kf_default_servicer_userid or "").strip() or None
+    state = 3 if serv else 2
+    try:
+        await kf.service_state_trans(
+            open_kfid=open_kfid,
+            external_userid=external_userid,
+            service_state=state,
+            servicer_userid=serv,
+        )
+        out["transferred"] = True
+        out["service_state"] = state
+        out["transfer_reply"] = REPLY_TRANSFER
+    except WecomAPIError as e:
+        logging.getLogger(__name__).exception("notify_sales 转人工失败")
+        out["transferred"] = False
+        out["transfer_reply"] = REPLY_TRANSFER
+        out["transfer_error"] = str(e)
+        out["transfer_errcode"] = e.errcode
+        out["transfer_api"] = e.api
     return out
 
 
