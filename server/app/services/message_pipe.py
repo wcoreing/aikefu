@@ -175,6 +175,13 @@ async def handle_kf_callback(
                     ss,
                     st.get("servicer_userid"),
                 )
+                if "已通知人工客服" in (reply or ""):
+                    logger.info(
+                        "skip duplicate reply (assume replied in mcp) msgid=%s open_kfid=%s external_userid=%s",
+                        mid,
+                        okfid,
+                        external_userid,
+                    )
                 continue
         except WecomAPIError as se:
             # 获取状态失败时仍尝试发送，但把接口与错误原因打全，便于后续排障

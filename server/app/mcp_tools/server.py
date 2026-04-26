@@ -116,7 +116,22 @@ async def notify_sales(
     if err:
         out["warning"] = err
 
-    # 通知后转人工：优先转指定接待人，否则进入待接入池
+    # 高意向：先回客户固定话术，再转人工（同步执行）
+    # 注意：若先转人工，可能导致会话进入 state=2/3 后 API 不能再回消息（95018）。
+    try:
+        await kf.send_text(
+            open_kfid=open_kfid,
+            external_userid=external_userid,
+            content=REPLY_TRANSFER,
+        )
+        out["replied_to_customer"] = True
+    except WecomAPIError as e:
+        logging.getLogger(__name__).exception("notify_sales 回客户失败")
+        out["replied_to_customer"] = False
+        out["reply_error"] = str(e)
+        out["reply_errcode"] = e.errcode
+        out["reply_api"] = e.api
+
     serv = (s.wecom_kf_default_servicer_userid or "").strip() or None
     state = 3 if serv else 2
     try:
@@ -128,14 +143,13 @@ async def notify_sales(
         )
         out["transferred"] = True
         out["service_state"] = state
-        out["transfer_reply"] = REPLY_TRANSFER
     except WecomAPIError as e:
         logging.getLogger(__name__).exception("notify_sales 转人工失败")
         out["transferred"] = False
-        out["transfer_reply"] = REPLY_TRANSFER
         out["transfer_error"] = str(e)
         out["transfer_errcode"] = e.errcode
         out["transfer_api"] = e.api
+
     return out
 
 
